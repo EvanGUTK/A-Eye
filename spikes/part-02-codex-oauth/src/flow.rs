@@ -44,6 +44,27 @@ pub struct FlowOutcome {
     pub callback_port: u16,
 }
 
+/// Endpoint URLs for `--live` must be `https`, or `http` only for a loopback
+/// host (exact match on the parsed host, never a string prefix), and must not
+/// carry userinfo (`http://127.0.0.1@evil.example/` has host evil.example).
+pub fn validate_endpoint(raw: &str) -> Result<(), String> {
+    let u = url::Url::parse(raw).map_err(|e| format!("not a valid URL: {e}"))?;
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("URL must not contain credentials".into());
+    }
+    let host = u.host().ok_or("URL has no host")?;
+    match u.scheme() {
+        "https" => Ok(()),
+        "http" => match host {
+            url::Host::Ipv4(ip) if ip == std::net::Ipv4Addr::LOCALHOST => Ok(()),
+            url::Host::Ipv6(ip) if ip == std::net::Ipv6Addr::LOCALHOST => Ok(()),
+            url::Host::Domain("localhost") => Ok(()),
+            _ => Err("plain http is only allowed for 127.0.0.1, ::1 or localhost".into()),
+        },
+        other => Err(format!("scheme '{other}' is not allowed (use https)")),
+    }
+}
+
 /// Build the authorization request URL (RFC 6749 4.1.1 + RFC 7636 4.3).
 pub fn build_authorize_url(
     cfg: &FlowConfig,
@@ -122,6 +143,34 @@ mod tests {
     fn browser(url: &url::Url) -> std::thread::JoinHandle<Result<u16, String>> {
         let u = url.to_string();
         std::thread::spawn(move || simulate_browser(&u))
+    }
+
+    #[test]
+    fn endpoint_validation_accepts_https_and_exact_loopback_http() {
+        for ok in [
+            "https://auth.openai.com/oauth/authorize",
+            "http://127.0.0.1:8080/oauth/token",
+            "http://localhost:8080/x",
+            "http://[::1]:8080/x",
+        ] {
+            assert!(validate_endpoint(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn endpoint_validation_rejects_prefix_and_userinfo_bypasses() {
+        for bad in [
+            "http://localhost.evil.example/",
+            "http://127.0.0.1@evil.example/",
+            "http://127.0.0.1.nip.io/",
+            "http://example.com/",
+            "https://user:pw@auth.example.com/",
+            "ftp://127.0.0.1/",
+            "http://127.0.0.2/",
+            "not a url",
+        ] {
+            assert!(validate_endpoint(bad).is_err(), "should reject {bad}");
+        }
     }
 
     #[test]
