@@ -88,6 +88,39 @@ impl Record {
         self.unknown.push(s.into());
     }
 
+    /// Checks that must all PASS for the spike to claim a proven live capture.
+    pub const REQUIRED_FOR_LIVE: [&'static str; 10] =
+        ["P1", "P2", "P3", "P4", "F1", "F2", "F3", "F4", "N1", "N2"];
+
+    /// One line that cannot be mistaken for success: computed from the rows,
+    /// independent of the process exit code (0 whenever a record is produced).
+    pub fn spike_status(&self) -> String {
+        for id in Self::REQUIRED_FOR_LIVE {
+            match self.checks.iter().find(|c| c.id == id) {
+                Some(c) if c.status == Status::Pass => {}
+                Some(c) => {
+                    return format!(
+                        "SPIKE STATUS: live capture NOT proven (reason: {} {} is {}: {})",
+                        c.id,
+                        c.name,
+                        c.status.label(),
+                        c.reason
+                    )
+                }
+                None => {
+                    return format!(
+                    "SPIKE STATUS: live capture NOT proven (reason: check {id} was not recorded)"
+                )
+                }
+            }
+        }
+        if self.status_of("N3") == Some(Status::Fail) {
+            return "SPIKE STATUS: live capture NOT proven (reason: N3 frame is one uniform colour, possible blank capture)".to_string();
+        }
+        "SPIKE STATUS: live capture proven (portal consent, PipeWire frame and PNG all observed)"
+            .to_string()
+    }
+
     pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(
@@ -136,9 +169,10 @@ impl Record {
         for p in &self.unknown {
             let _ = writeln!(out, "  - {p}");
         }
+        let _ = writeln!(out, "\n{}", self.spike_status());
         let _ = writeln!(
             out,
-            "\n==================================================================="
+            "==================================================================="
         );
         out
     }
@@ -147,6 +181,29 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spike_status_is_not_proven_until_every_required_check_passes() {
+        let mut r = Record::default();
+        assert!(r.spike_status().contains("NOT proven"));
+        for id in Record::REQUIRED_FOR_LIVE {
+            r.check(id, "x", Status::Pass, "ok");
+        }
+        assert!(r.spike_status().contains("live capture proven"));
+        r.check("N3", "uniform", Status::Fail, "blank");
+        assert!(r.spike_status().contains("NOT proven"));
+        let mut r2 = Record::default();
+        for id in Record::REQUIRED_FOR_LIVE {
+            let st = if id == "F2" {
+                Status::Unverified
+            } else {
+                Status::Pass
+            };
+            r2.check(id, "x", st, "why");
+        }
+        let line = r2.spike_status();
+        assert!(line.contains("NOT proven") && line.contains("F2") && line.contains("UNVERIFIED"));
+    }
 
     #[test]
     fn render_lists_checks_and_totals() {
@@ -161,6 +218,7 @@ mod tests {
         assert!(text.contains("1 PASS, 1 FAIL, 1 UNVERIFIED"));
         assert!(text.contains("UNVERIFIED  not run"));
         assert!(text.contains("- a thing"));
+        assert!(text.contains("SPIKE STATUS: live capture NOT proven"));
         assert_eq!(r.status_of("B"), Some(Status::Unverified));
         assert_eq!(r.status_of("Z"), None);
     }
