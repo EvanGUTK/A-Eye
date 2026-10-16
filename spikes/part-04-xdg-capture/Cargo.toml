@@ -24,7 +24,7 @@ name = "spike-04-xdg-capture"
 path = "src/main.rs"
 
 [dependencies]
-libc = "0.2"
+libc = "=0.2.190"
 ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "screencast"] }
 pipewire = "=0.10.1"
 png = "=0.18.1"

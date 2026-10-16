@@ -117,8 +117,21 @@ impl Record {
         if self.status_of("N3") == Some(Status::Fail) {
             return "SPIKE STATUS: live capture NOT proven (reason: N3 frame is one uniform colour, possible blank capture)".to_string();
         }
-        "SPIKE STATUS: live capture proven (portal consent, PipeWire frame and PNG all observed)"
-            .to_string()
+        // #13 also requires the monitor id/scale of the selected stream.
+        match self.checks.iter().find(|c| c.id == "M1") {
+            Some(c) if c.status == Status::Pass => {
+                "SPIKE STATUS: live capture proven (portal consent, PipeWire frame, PNG and monitor/scale all observed)"
+                    .to_string()
+            }
+            Some(c) => format!(
+                "SPIKE STATUS: live capture proven EXCEPT M1 {} is {}: {} (#13 scale criterion not met)",
+                c.name,
+                c.status.label(),
+                c.reason
+            ),
+            None => "SPIKE STATUS: live capture proven EXCEPT M1 was not recorded (#13 scale criterion not met)"
+                .to_string(),
+        }
     }
 
     pub fn render(&self) -> String {
@@ -189,7 +202,24 @@ mod tests {
         for id in Record::REQUIRED_FOR_LIVE {
             r.check(id, "x", Status::Pass, "ok");
         }
-        assert!(r.spike_status().contains("live capture proven"));
+        // all required pass but M1 absent / unverified: not a full success
+        assert!(r
+            .spike_status()
+            .contains("proven EXCEPT M1 was not recorded"));
+        r.check("M1", "scale", Status::Unverified, "no match");
+        let s = r.spike_status();
+        assert!(
+            s.contains("proven EXCEPT M1") && s.contains("UNVERIFIED"),
+            "{s}"
+        );
+        assert!(!s.contains("NOT proven"));
+        r.checks.pop();
+        r.check("M1", "scale", Status::Pass, "match");
+        let s = r.spike_status();
+        assert!(
+            s.contains("live capture proven (") && !s.contains("EXCEPT"),
+            "{s}"
+        );
         r.check("N3", "uniform", Status::Fail, "blank");
         assert!(r.spike_status().contains("NOT proven"));
         let mut r2 = Record::default();
