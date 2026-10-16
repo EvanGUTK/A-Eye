@@ -224,13 +224,49 @@ fn read_all<R: Read + Send + 'static>(
 /// Spawn `stub_exe --sdk-stub <mode>` with the token handed over via env and
 /// inspect it from the outside while it is alive.
 pub fn run_handoff(stub_exe: &Path, mode: StubMode, token: &Secret) -> Result<HandoffReport, String> {
+    run_handoff_with(stub_exe, mode, token, &read_proc)
+}
+
+/// Reads `/proc/<pid>/<file>`. Injectable so tests can force the inspection to fail.
+pub type ProcReader<'a> = &'a dyn Fn(u32, &str) -> std::io::Result<Vec<u8>>;
+
+pub fn read_proc(pid: u32, file: &str) -> std::io::Result<Vec<u8>> {
+    std::fs::read(format!("/proc/{pid}/{file}"))
+}
+
+/// Same as [`run_handoff`] with an injectable `/proc` reader.
+pub fn run_handoff_with(stub_exe: &Path, mode: StubMode, token: &Secret, proc_reader: ProcReader) -> Result<HandoffReport, String> {
     let scratch = scratch_dir()?;
-    let result = run_handoff_in(stub_exe, mode, token, &scratch);
+    let result = run_handoff_in(stub_exe, mode, token, &scratch, proc_reader);
+    // Only after run_handoff_in has returned: its guard has already killed and
+    // reaped the child, so no live process can be left holding the token.
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
 
-fn run_handoff_in(stub_exe: &Path, mode: StubMode, token: &Secret, scratch: &Path) -> Result<HandoffReport, String> {
+/// Owns the spawned stub and its pipe-reader threads. On drop (every early
+/// return, including `?`) it kills and reaps the child, then joins the readers,
+/// so no orphan holding the token in its environment can outlive the call.
+struct ChildGuard {
+    child: std::process::Child,
+    readers: Vec<std::thread::JoinHandle<Vec<u8>>>,
+    reaped: bool,
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        // Pipes are closed once the child is gone, so the readers finish.
+        for h in self.readers.drain(..) {
+            let _ = h.join();
+        }
+    }
+}
+
+fn run_handoff_in(stub_exe: &Path, mode: StubMode, token: &Secret, scratch: &Path, proc_reader: ProcReader) -> Result<HandoffReport, String> {
     let mut args: Vec<OsString> = vec!["--sdk-stub".into(), mode.as_arg().into()];
     if mode == StubMode::LeakArgv {
         // Deliberately wrong: negative control for the argv detector.
@@ -239,20 +275,24 @@ fn run_handoff_in(stub_exe: &Path, mode: StubMode, token: &Secret, scratch: &Pat
     let mut cmd = build_command(stub_exe, &args, token, scratch, scratch);
     let mut child = cmd.spawn().map_err(|e| format!("spawn stub: {e}"))?;
     let pid = child.id();
+    // Take the pipes before anything can fail, then hand everything to the guard
+    // so EVERY later `?` kills + reaps the child and joins the readers.
+    let (child_out, child_err, child_in) = (child.stdout.take(), child.stderr.take(), child.stdin.take());
+    let mut guard = ChildGuard { child, readers: Vec::new(), reaped: false };
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-    let out_h = read_all(child.stdout.take().ok_or("no stdout")?, Some(ready_tx));
-    let err_h = read_all(child.stderr.take().ok_or("no stderr")?, None);
+    let child_out = child_out.ok_or("no stdout")?;
+    let child_err = child_err.ok_or("no stderr")?;
+    guard.readers.push(read_all(child_out, Some(ready_tx)));
+    guard.readers.push(read_all(child_err, None));
 
     // Wait for the stub's "ready" line before touching /proc: right after
     // spawn() the kernel may not have populated the new mm's env/arg ranges yet
     // (observed: empty /proc/<pid>/environ). Once the stub has printed, exec is done.
     if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
         return Err("stub never printed its ready line".into());
     }
-    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|e| format!("read cmdline: {e}"))?;
-    let environ = std::fs::read(format!("/proc/{pid}/environ")).map_err(|e| format!("read environ: {e}"))?;
+    let cmdline = proc_reader(pid, "cmdline").map_err(|e| format!("read cmdline: {e}"))?;
+    let environ = proc_reader(pid, "environ").map_err(|e| format!("read environ: {e}"))?;
     let want = format!("{TOKEN_ENV}={}", token.expose());
     let env_has_token = environ.split(|b| *b == 0).any(|kv| kv == want.as_bytes());
     let env_keys: Vec<String> = environ
@@ -268,23 +308,23 @@ fn run_handoff_in(stub_exe: &Path, mode: StubMode, token: &Secret, scratch: &Pat
     let argv_has_token = contains(&cmdline, token.expose().as_bytes());
 
     // Release the stub and wait (bounded).
-    if let Some(mut stdin) = child.stdin.take() {
+    if let Some(mut stdin) = child_in {
         let _ = stdin.write_all(b"\n");
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(s) => break s,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("stub did not exit in 10s".into());
+        match guard.child.try_wait().map_err(|e| e.to_string())? {
+            Some(s) => {
+                guard.reaped = true;
+                break s;
             }
+            None if Instant::now() >= deadline => return Err("stub did not exit in 10s".into()),
             None => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    let stdout = out_h.join().map_err(|_| "stdout reader panicked")?;
-    let stderr = err_h.join().map_err(|_| "stderr reader panicked")?;
+    let mut readers = std::mem::take(&mut guard.readers).into_iter();
+    let stdout = readers.next().ok_or("missing stdout reader")?.join().map_err(|_| "stdout reader panicked")?;
+    let stderr = readers.next().ok_or("missing stderr reader")?.join().map_err(|_| "stderr reader panicked")?;
     let disk_has_token = dir_contains(scratch, token.expose().as_bytes()).map_err(|e| format!("disk scan: {e}"))?;
 
     let stdout_text = String::from_utf8_lossy(&stdout);

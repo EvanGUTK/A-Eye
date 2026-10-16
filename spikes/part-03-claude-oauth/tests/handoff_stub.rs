@@ -1,7 +1,7 @@
 //! Token handoff to a stub SDK-runner child process (this crate's own binary
 //! re-executed with `--sdk-stub`). SYNTHETIC token only.
 
-use spike_03_claude_oauth::handoff::{run_handoff, StubMode, OUTRANKING_ENV, TOKEN_ENV};
+use spike_03_claude_oauth::handoff::{read_proc, run_handoff, run_handoff_with, StubMode, OUTRANKING_ENV, TOKEN_ENV};
 use spike_03_claude_oauth::secret::Secret;
 use std::path::Path;
 
@@ -64,4 +64,40 @@ fn scratch_dir_is_removed_afterwards() {
     let r = run_handoff(Path::new(STUB), StubMode::LeakFile, &t).unwrap();
     assert!(r.disk_has_token);
     assert!(!r.scratch.exists(), "scratch dir (holding a leaked token) must be deleted");
+}
+
+/// Which of `cmdline` / `environ` the injected reader should fail on.
+fn failing_inspection_leaves_nothing_behind(fail_on: &'static str) {
+    use std::sync::Mutex;
+    let t = token();
+    let seen: Mutex<Option<(u32, std::path::PathBuf)>> = Mutex::new(None);
+    let reader = |pid: u32, file: &str| -> std::io::Result<Vec<u8>> {
+        if file == fail_on {
+            // Record the live child's pid and its private scratch dir (its cwd).
+            let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))?;
+            *seen.lock().unwrap() = Some((pid, cwd));
+            return Err(std::io::Error::other("injected /proc failure"));
+        }
+        read_proc(pid, file)
+    };
+    let r = run_handoff_with(Path::new(STUB), StubMode::Clean, &t, &reader);
+    let err = r.expect_err("inspection failure must surface as Err");
+    assert!(err.contains("injected"), "{err}");
+    let (pid, scratch) = seen.lock().unwrap().clone().expect("reader saw the child");
+    // The child must already be killed AND reaped: no /proc entry (a zombie would still have one).
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "stub pid {pid} still present after run_handoff returned Err (orphan/zombie holding the token)"
+    );
+    assert!(!scratch.exists(), "scratch dir {scratch:?} left behind");
+}
+
+#[test]
+fn failed_cmdline_inspection_kills_and_reaps_child() {
+    failing_inspection_leaves_nothing_behind("cmdline");
+}
+
+#[test]
+fn failed_environ_inspection_kills_and_reaps_child() {
+    failing_inspection_leaves_nothing_behind("environ");
 }
