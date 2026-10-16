@@ -9,5 +9,13 @@ description = "A-Eye spike part 01: credential store (Secret Service via keyring
 # Standalone spike: never join a parent workspace.
 [workspace]
 
+# Exact pins: these are the versions that were tested (see Cargo.lock and the
+# capability record printed by `cargo run`).
 [dependencies]
+# keyring 4.x = keyring-core + pluggable stores. Default feature `v1` selects the
+# zbus-based Secret Service store on Linux (pure Rust, no libdbus/libsecret link).
 keyring = "=4.2.0"
+aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
+argon2 = { version = "=0.6.0", features = ["zeroize"] }
+zeroize = "=1.9.1"
+getrandom = "=0.4.3"
