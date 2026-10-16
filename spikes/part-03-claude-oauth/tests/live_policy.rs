@@ -57,6 +57,8 @@ fn live_accepts_https_then_stops_at_ack_gate() {
     assert_eq!(code, Some(2));
     assert!(!err.contains("--live refused"), "https endpoints must pass validation: {err}");
     assert!(err.contains("A_EYE_LIVE_ACK_POLICY=1"), "{err}");
+    // The warning must state the default (discard) and the separate storage opt-in.
+    assert!(err.contains("DISCARDED") && err.contains("A_EYE_LIVE_STORE_TOKENS=1"), "{err}");
 }
 
 #[test]

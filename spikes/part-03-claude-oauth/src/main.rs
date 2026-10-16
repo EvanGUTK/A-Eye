@@ -14,7 +14,7 @@ fn main() {
         }
         Some("--live") => std::process::exit(live::run()),
         Some("--help") | Some("-h") => {
-            println!("spike-03-claude-oauth\n  (no args)  run all checks against a LOCAL MOCK and print the capability record\n  --live     opt-in real flow; needs A_EYE_OAUTH_CLIENT_ID, A_EYE_OAUTH_AUTH_URL, A_EYE_OAUTH_TOKEN_URL, A_EYE_LIVE_ACK_POLICY=1");
+            println!("spike-03-claude-oauth\n  (no args)  run all checks against a LOCAL MOCK and print the capability record\n  --live     opt-in real flow; needs A_EYE_OAUTH_CLIENT_ID, A_EYE_OAUTH_AUTH_URL, A_EYE_OAUTH_TOKEN_URL, A_EYE_LIVE_ACK_POLICY=1 (tokens are discarded unless A_EYE_LIVE_STORE_TOKENS=1)");
         }
         _ => {
             let exe = std::env::current_exe().expect("current_exe");
