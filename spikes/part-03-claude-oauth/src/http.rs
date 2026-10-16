@@ -4,7 +4,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 64 * 1024;
@@ -30,9 +30,20 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-pub fn read_request(stream: &mut TcpStream, read_timeout: Duration) -> io::Result<Request> {
+/// Read until `deadline` (absolute). Before EVERY read the socket timeout is
+/// set to the time remaining, so a slow-trickling peer cannot extend it.
+fn read_some(stream: &mut TcpStream, chunk: &mut [u8], deadline: Instant) -> io::Result<usize> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "request deadline exceeded"));
+    }
+    stream.set_read_timeout(Some(remaining))?;
+    stream.read(chunk)
+}
+
+pub fn read_request(stream: &mut TcpStream, deadline: Instant) -> io::Result<Request> {
     stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(read_timeout))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 2048];
     let head_end = loop {
@@ -42,7 +53,7 @@ pub fn read_request(stream: &mut TcpStream, read_timeout: Duration) -> io::Resul
         if buf.len() > MAX_HEAD {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "head too large"));
         }
-        let n = stream.read(&mut chunk)?;
+        let n = read_some(stream, &mut chunk, deadline)?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -74,7 +85,7 @@ pub fn read_request(stream: &mut TcpStream, read_timeout: Duration) -> io::Resul
     }
     let mut body = buf[head_end + 4..].to_vec();
     while body.len() < content_length {
-        let n = stream.read(&mut chunk)?;
+        let n = read_some(stream, &mut chunk, deadline)?;
         if n == 0 {
             break;
         }

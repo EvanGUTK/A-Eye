@@ -80,7 +80,7 @@ impl MockProvider {
             while !stop2.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let Ok(req) = read_request(&mut stream, Duration::from_secs(2)) else {
+                        let Ok(req) = read_request(&mut stream, std::time::Instant::now() + Duration::from_secs(2)) else {
                             continue;
                         };
                         let url = Url::parse(&format!("http://127.0.0.1{}", req.target)).ok();

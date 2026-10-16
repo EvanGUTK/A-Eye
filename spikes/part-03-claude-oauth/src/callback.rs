@@ -53,7 +53,7 @@ impl CallbackServer {
             }
             match self.listener.accept() {
                 Ok((stream, _peer)) => {
-                    if let Some(result) = self.handle(stream, expected_state) {
+                    if let Some(result) = self.handle(stream, expected_state, deadline) {
                         return result;
                     }
                 }
@@ -70,8 +70,11 @@ impl CallbackServer {
         &self,
         mut stream: TcpStream,
         expected_state: &str,
+        overall_deadline: Instant,
     ) -> Option<Result<Secret, FlowError>> {
-        let req = match read_request(&mut stream, Duration::from_secs(2)) {
+        // Per-connection absolute deadline, never later than the overall one.
+        let conn_deadline = (Instant::now() + Duration::from_secs(2)).min(overall_deadline);
+        let req = match read_request(&mut stream, conn_deadline) {
             Ok(r) => r,
             Err(_) => return None, // preconnect / garbage: ignore
         };
@@ -244,6 +247,39 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
         // Listener dropped: connecting must now fail.
         assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    }
+
+    /// N1 regression: a client trickling one byte every 200 ms (never finishing
+    /// the request head) must not be able to hold the server past the overall
+    /// callback deadline.
+    #[test]
+    fn trickling_client_cannot_extend_the_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let server = CallbackServer::bind().unwrap();
+        let port = server.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let trickler = thread::spawn(move || {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let head = format!("GET /callback?code=x&state=st4te HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Pad: ");
+            for b in head.bytes().chain(std::iter::repeat(b'a')).take(60) {
+                if stop2.load(Ordering::Relaxed) || s.write_all(&[b]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        });
+        let started = Instant::now();
+        let err = server.wait("st4te", Duration::from_secs(1)).unwrap_err();
+        let elapsed = started.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let _ = trickler.join();
+        assert_eq!(err, FlowError::Timeout);
+        assert!(
+            elapsed < Duration::from_millis(1600),
+            "deadline overrun by trickling client: took {elapsed:?} for a 1s timeout"
+        );
     }
 
     #[test]
