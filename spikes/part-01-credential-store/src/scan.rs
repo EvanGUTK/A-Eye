@@ -78,7 +78,7 @@ pub fn scan_for_canary(roots: &[PathBuf], needle: &[u8], budget: Duration) -> Sc
         }
         if ft.is_dir() {
             match fs::read_dir(&p) {
-                Ok(rd) => stack.extend(rd.filter_map(Result::ok).map(|e| e.path())),
+                Ok(rd) => push_children(rd.map(|e| e.map(|e| e.path())), &mut stack, &mut res),
                 Err(_) => res.unreadable += 1,
             }
         } else if ft.is_file() {
@@ -88,13 +88,47 @@ pub fn scan_for_canary(roots: &[PathBuf], needle: &[u8], budget: Duration) -> Sc
     res
 }
 
+/// Queue directory children; an error yielded mid-iteration means an entry may
+/// have been missed, so it is counted as unreadable (which makes the scan incomplete).
+fn push_children(
+    entries: impl Iterator<Item = std::io::Result<PathBuf>>,
+    stack: &mut Vec<PathBuf>,
+    res: &mut ScanResult,
+) {
+    for entry in entries {
+        match entry {
+            Ok(path) => stack.push(path),
+            Err(_) => res.unreadable += 1,
+        }
+    }
+}
+
 fn scan_file(path: &Path, len: u64, needle: &[u8], res: &mut ScanResult) {
-    if len > MAX_FILE_BYTES {
+    match fs::File::open(path) {
+        Ok(f) => scan_reader(path, f, len, MAX_FILE_BYTES, needle, res),
+        Err(_) => res.unreadable += 1,
+    }
+}
+
+/// Read at most `limit` bytes from `reader` and search them. The size limit is
+/// enforced WHILE reading (`take(limit + 1)`), not just from the earlier metadata
+/// length, so a file that grew (or is being appended to) cannot exhaust memory.
+/// A reader that yields more than `limit` bytes counts as `skipped_large`.
+fn scan_reader(
+    path: &Path,
+    reader: impl Read,
+    len_hint: u64,
+    limit: u64,
+    needle: &[u8],
+    res: &mut ScanResult,
+) {
+    if len_hint > limit {
         res.skipped_large += 1;
         return;
     }
-    let mut buf = Vec::with_capacity(len as usize);
-    match fs::File::open(path).and_then(|mut f| f.read_to_end(&mut buf)) {
+    let mut buf = Vec::with_capacity(len_hint as usize);
+    match reader.take(limit.saturating_add(1)).read_to_end(&mut buf) {
+        Ok(n) if n as u64 > limit => res.skipped_large += 1,
         Ok(_) => {
             res.files_scanned += 1;
             if contains(&buf, needle) {
@@ -235,5 +269,69 @@ mod tests {
         for d in [outside, real, holder] {
             fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    /// Reader that claims nothing but yields far more than the limit, counting
+    /// how much was actually pulled from it.
+    struct Endless {
+        pulled: std::rc::Rc<std::cell::Cell<u64>>,
+    }
+
+    impl Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            buf.fill(b'a');
+            self.pulled.set(self.pulled.get() + buf.len() as u64);
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn file_that_outgrows_its_metadata_length_is_skipped_and_bounded() {
+        let pulled = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut res = ScanResult::default();
+        // metadata said 10 bytes (under the limit of 1000) but the reader is endless.
+        scan_reader(
+            Path::new("grown"),
+            Endless {
+                pulled: pulled.clone(),
+            },
+            10,
+            1000,
+            b"zzz",
+            &mut res,
+        );
+        assert_eq!(res.skipped_large, 1);
+        assert_eq!(res.files_scanned, 0);
+        assert!(!res.complete());
+        // Never reads meaningfully past limit + 1 (one buffer-sized read at most).
+        assert!(pulled.get() <= 1001 + 8192, "pulled {} bytes", pulled.get());
+    }
+
+    #[test]
+    fn file_at_exactly_the_limit_is_scanned() {
+        let mut res = ScanResult::default();
+        let data = vec![b'a'; 1000];
+        scan_reader(Path::new("exact"), &data[..], 1000, 1000, b"zzz", &mut res);
+        assert_eq!((res.files_scanned, res.skipped_large), (1, 0));
+        assert!(res.complete());
+        let mut over = ScanResult::default();
+        let data = vec![b'a'; 1001];
+        scan_reader(Path::new("over"), &data[..], 1000, 1000, b"zzz", &mut over);
+        assert_eq!((over.files_scanned, over.skipped_large), (0, 1));
+    }
+
+    #[test]
+    fn directory_iteration_error_is_counted_and_makes_scan_incomplete() {
+        let entries: Vec<std::io::Result<PathBuf>> = vec![
+            Ok(PathBuf::from("/a")),
+            Err(std::io::Error::other("EIO mid-iteration")),
+            Ok(PathBuf::from("/b")),
+        ];
+        let mut stack = Vec::new();
+        let mut res = ScanResult::default();
+        push_children(entries.into_iter(), &mut stack, &mut res);
+        assert_eq!(stack.len(), 2, "good entries are still queued");
+        assert_eq!(res.unreadable, 1);
+        assert!(!res.complete());
     }
 }
