@@ -29,11 +29,12 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 ## What is still unverified (parts 01-04)
 
 - Live OAuth against Codex (part 02) and Claude (part 03): needs interactive browser consent on a real
-  subscription. Part 03's live use also needs Anthropic approval or a switch to the permitted path
+  subscription. Part 03's live use should wait for Anthropic's approval or a switch to the permitted path
   (see the F01 finding in its capability record and PR #19).
 - Real Claude Agent SDK session turn and whether the SDK accepts a subscription token (part 03).
 - Selected-stream monitor id/scale and the two-monitor different-scale capture (part 04).
-- Secret Service with a password-protected keyring, kwallet, and the locked-keyring GUI unlock prompt (part 01).
+- Part 01 against the real login keyring once it is password-protected (it is unencrypted on the test machine), kwallet,
+  and the locked-keyring GUI unlock prompt. An encrypted, unlocked private gnome-keyring did pass 17/17 checks.
 - Captures from part 04 are written to a gitignored `out/` folder and may contain private screen content.
 
 ## Rules for spike code
