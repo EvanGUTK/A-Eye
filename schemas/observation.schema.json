@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EvanGUTK/A-Eye/blob/main/schemas/observation.schema.json",
+  "title": "A-Eye draft observation envelope",
+  "description": "Design contract only. Authorization, scope containment and epoch validation require runtime checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation_id", "session_id", "capture_epoch", "sequence", "captured_at", "monotonic_ms", "monitor_id", "scope", "pointer", "image", "transform", "redacted"],
+  "properties": {
+    "schema_version": {"const": "0.1.0-draft"},
+    "observation_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "capture_epoch": {"type": "integer", "minimum": 0},
+    "sequence": {"type": "integer", "minimum": 0},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "monotonic_ms": {"type": "number", "minimum": 0},
+    "monitor_id": {"type": "string", "minLength": 1},
+    "scope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "coordinate_space", "x", "y", "width", "height"],
+      "properties": {
+        "mode": {"enum": ["look", "watch-region", "follow-pointer", "watch-monitor"]},
+        "coordinate_space": {"const": "monitor-local-physical-pixels"},
+        "x": {"type": "integer", "minimum": 0},
+        "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "pointer": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["x", "y", "coordinate_space", "anchored_at"],
+          "properties": {
+            "x": {"type": "integer", "minimum": 0},
+            "y": {"type": "integer", "minimum": 0},
+            "coordinate_space": {"const": "crop-local-physical-pixels"},
+            "anchored_at": {"type": "string", "format": "date-time"}
+          }
+        }
+      ]
+    },
+    "image": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mime_type", "width", "height", "sha256", "buffer_id"],
+      "properties": {
+        "mime_type": {"enum": ["image/png", "image/jpeg"]},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "buffer_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "transform": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scale_x", "scale_y", "rotation_degrees"],
+      "properties": {
+        "scale_x": {"type": "number", "exclusiveMinimum": 0},
+        "scale_y": {"type": "number", "exclusiveMinimum": 0},
+        "rotation_degrees": {"const": 0, "description": "Images normalized to upright crop orientation before this envelope is constructed."}
+      }
+    },
+    "redacted": {"type": "boolean"}
+  }
+}
