@@ -409,7 +409,7 @@ pub fn collect(stub_exe: &Path) -> Record {
         name: "OAUTH.md assumption: third-party app runs its own claude.ai OAuth and stores the tokens",
         status: Status::Fail,
         kind: Kind::Finding,
-        reason: "CONTRADICTED by Anthropic docs. legal-and-compliance: third parties may not offer claude.ai login, route via Free/Pro/Max credentials, or 'collect, store, or intermediate Claude.ai credentials or session tokens'. agent-sdk/overview: 'Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK' (an explicit Anthropic approval is the only documented exception)".into(),
+        reason: "CONTRADICTED by Anthropic docs. legal-and-compliance: third parties may not offer claude.ai login, route via Free/Pro/Max credentials, or 'collect, store, or intermediate Claude.ai credentials or session tokens'. agent-sdk/overview: 'Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK' (an explicit Anthropic approval is the only documented exception). Also from legal-and-compliance: 'sign-in to a Claude account must complete through Anthropic's own flow'. The documented PERMITTED path: an end user signing in to the UNMODIFIED Claude Code binary with their own subscription (also on platforms that host it); A-Eye would then drive that binary without ever touching, collecting or storing the token. The user has chosen to keep the A-Eye-owned OAuth path; this finding records the facts for that product decision and does not change it".into(),
     });
     checks.push(unverified("F02", "live PKCE against claude.ai (endpoints, client_id, scopes)", "not run: needs interactive consent; no client_id is hardcoded/extracted; --live reads A_EYE_OAUTH_* env and is opt-in"));
     checks.push(unverified("F03", "real access-token lifetime", "docs: `claude setup-token` token is one year; /login access-token TTL and refresh behavior are not documented; mock uses synthetic 3600s"));
@@ -460,7 +460,7 @@ pub fn render(rec: &Record) -> String {
     ] {
         s.push_str(&format!("  {l}\n"));
     }
-    s.push_str("\nNotes: zeroize-on-drop is not implemented (no extra dependency in the spike). The mock server speaks plain HTTP on loopback only. Cleartext is refused for any non-loopback host (parsed-URL check in endpoint.rs, enforced in the token exchange), and --live additionally requires https for both endpoints; that is a client-side policy, not a statement about what any real provider serves.\n");
+    s.push_str("\nNotes: zeroize-on-drop is not implemented (no extra dependency in the spike). The mock server speaks plain HTTP on loopback only. Cleartext is refused for any non-loopback host (parsed-URL check in endpoint.rs, enforced in the token exchange, which also refuses to follow any redirect and sends the normalized URL), and --live additionally requires https for both endpoints; that is a client-side policy, not a statement about what any real provider serves.\n");
     s
 }
 
