@@ -90,7 +90,10 @@ impl Record {
 
     pub fn render(&self) -> String {
         let mut out = String::new();
-        let _ = writeln!(out, "================ A-Eye spike 04 capability record ================");
+        let _ = writeln!(
+            out,
+            "================ A-Eye spike 04 capability record ================"
+        );
         for s in &self.sections {
             let _ = writeln!(out, "\n[{}]", s.title);
             let w = s.rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
@@ -133,7 +136,10 @@ impl Record {
         for p in &self.unknown {
             let _ = writeln!(out, "  - {p}");
         }
-        let _ = writeln!(out, "\n===================================================================");
+        let _ = writeln!(
+            out,
+            "\n==================================================================="
+        );
         out
     }
 }

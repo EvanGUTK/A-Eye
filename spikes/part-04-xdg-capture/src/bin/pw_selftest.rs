@@ -48,7 +48,22 @@ fn main() {
                 "pixels checked={} mismatching={bad} (expected RGB 33 66 cc)",
                 f.width as usize * f.height as usize
             );
-            std::process::exit(if bad == 0 { 0 } else { 1 });
+            // PNG round trip of the real PipeWire frame (synthetic content).
+            let png_bytes = f.encode_png().expect("encode");
+            let dec = png::Decoder::new(std::io::Cursor::new(&png_bytes));
+            let mut reader = dec.read_info().expect("png header");
+            let mut buf = vec![0; reader.output_buffer_size().expect("size")];
+            let info = reader.next_frame(&mut buf).expect("png decode");
+            let (px, _) = buf[..info.buffer_size()].as_chunks::<3>();
+            let png_bad = px.iter().filter(|p| **p != [0x33, 0x66, 0xcc]).count();
+            println!(
+                "png round trip: {}x{} ({} bytes encoded) mismatching pixels={png_bad}",
+                info.width,
+                info.height,
+                png_bytes.len()
+            );
+            let ok = bad == 0 && png_bad == 0 && (info.width, info.height) == (f.width, f.height);
+            std::process::exit(if ok { 0 } else { 1 });
         }
         Err(e) => {
             eprintln!("pw_selftest FAILED: {e}");

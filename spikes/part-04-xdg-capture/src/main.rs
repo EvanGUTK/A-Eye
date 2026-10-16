@@ -4,6 +4,7 @@
 
 use std::time::Instant;
 
+use spike_04_xdg_capture::frame;
 use spike_04_xdg_capture::portal::{self, PortalError, StartedSession, CONSENT_TIMEOUT};
 use spike_04_xdg_capture::pw;
 use spike_04_xdg_capture::record::{Record, Status};
@@ -24,10 +25,18 @@ fn environment(rec: &mut Record) {
     );
 
     let sess = sysinfo::session_info();
-    rec.row("session", "XDG_CURRENT_DESKTOP", sess.xdg_current_desktop.clone());
+    rec.row(
+        "session",
+        "XDG_CURRENT_DESKTOP",
+        sess.xdg_current_desktop.clone(),
+    );
     rec.row("session", "XDG_SESSION_TYPE", sess.xdg_session_type.clone());
     rec.row("session", "WAYLAND_DISPLAY", sess.wayland_display.clone());
-    rec.row("session", "compositor version", sess.compositor_version.clone());
+    rec.row(
+        "session",
+        "compositor version",
+        sess.compositor_version.clone(),
+    );
 
     let p = sysinfo::portal_info(&sess.xdg_current_desktop);
     rec.row("portal", "frontend package", p.frontend_package.clone());
@@ -146,7 +155,12 @@ async fn portal_stage(rec: &mut Record) -> Option<StartedSession> {
             c
         }
         Err(e) => {
-            rec.check("P1", "ScreenCast interface bound", Status::Fail, e.to_string());
+            rec.check(
+                "P1",
+                "ScreenCast interface bound",
+                Status::Fail,
+                e.to_string(),
+            );
             rec.check(
                 "P2",
                 "create_session",
@@ -183,7 +197,9 @@ async fn portal_stage(rec: &mut Record) -> Option<StartedSession> {
     rec.row(
         "portal",
         "ScreenCast interface version",
-        f.interface_version.map(|v| v.to_string()).unwrap_or_default(),
+        f.interface_version
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
     );
     rec.row(
         "portal",
@@ -282,7 +298,11 @@ fn record_stream(
     mons: &Option<Vec<sysinfo::Monitor>>,
 ) -> Option<sysinfo::Monitor> {
     let st = &s.stream;
-    rec.row("selected stream", "PipeWire node id", st.node_id.to_string());
+    rec.row(
+        "selected stream",
+        "PipeWire node id",
+        st.node_id.to_string(),
+    );
     rec.row(
         "selected stream",
         "source type",
@@ -363,10 +383,30 @@ fn record_stream(
 }
 
 fn unverified_capture_checks(rec: &mut Record, why: &str) {
-    rec.check("F1", "PipeWire stream connected + format negotiated", Status::Unverified, why.to_string());
-    rec.check("F2", "first real frame within 10s", Status::Unverified, why.to_string());
-    rec.check("F3", "buffer type identified (SHM, not DMA-BUF)", Status::Unverified, why.to_string());
-    rec.check("F4", "frame dimensions match portal monitor", Status::Unverified, why.to_string());
+    rec.check(
+        "F1",
+        "PipeWire stream connected + format negotiated",
+        Status::Unverified,
+        why.to_string(),
+    );
+    rec.check(
+        "F2",
+        "first real frame within 10s",
+        Status::Unverified,
+        why.to_string(),
+    );
+    rec.check(
+        "F3",
+        "buffer type identified (SHM, not DMA-BUF)",
+        Status::Unverified,
+        why.to_string(),
+    );
+    rec.check(
+        "F4",
+        "frame dimensions match portal monitor",
+        Status::Unverified,
+        why.to_string(),
+    );
 }
 
 /// #14: consume exactly one frame from the node the user selected.
@@ -383,10 +423,9 @@ async fn capture_stage(
             return None;
         }
     };
-    let joined = tokio::task::spawn_blocking(move || {
-        pw::capture_one_frame(target, pw::FIRST_FRAME_TIMEOUT)
-    })
-    .await;
+    let joined =
+        tokio::task::spawn_blocking(move || pw::capture_one_frame(target, pw::FIRST_FRAME_TIMEOUT))
+            .await;
     let result = match joined {
         Ok(r) => r,
         Err(e) => {
@@ -396,18 +435,42 @@ async fn capture_stage(
     };
     match result {
         Err(e) => {
-            let negotiated = matches!(&e, pw::CaptureError::Timeout { negotiated: Some(_), .. }
-                | pw::CaptureError::UnsupportedBuffer(_)
-                | pw::CaptureError::BadFrame(_));
+            let negotiated = matches!(
+                &e,
+                pw::CaptureError::Timeout {
+                    negotiated: Some(_),
+                    ..
+                } | pw::CaptureError::UnsupportedBuffer(_)
+                    | pw::CaptureError::BadFrame(_)
+            );
             rec.check(
                 "F1",
                 "PipeWire stream connected + format negotiated",
-                if negotiated { Status::Pass } else { Status::Fail },
+                if negotiated {
+                    Status::Pass
+                } else {
+                    Status::Fail
+                },
                 e.to_string(),
             );
-            rec.check("F2", "first real frame within 10s", Status::Fail, e.to_string());
-            rec.check("F3", "buffer type identified (SHM, not DMA-BUF)", Status::Unverified, "no frame received");
-            rec.check("F4", "frame dimensions match portal monitor", Status::Unverified, "no frame received");
+            rec.check(
+                "F2",
+                "first real frame within 10s",
+                Status::Fail,
+                e.to_string(),
+            );
+            rec.check(
+                "F3",
+                "buffer type identified (SHM, not DMA-BUF)",
+                Status::Unverified,
+                "no frame received",
+            );
+            rec.check(
+                "F4",
+                "frame dimensions match portal monitor",
+                Status::Unverified,
+                "no frame received",
+            );
             rec.unknown(format!("pipewire: {e}"));
             None
         }
@@ -417,24 +480,72 @@ async fn capture_stage(
             rec.row(sec, "negotiated format", m.negotiated_format.clone());
             rec.row(sec, "dimensions", format!("{}x{}", m.width, m.height));
             rec.row(sec, "stride (bytes)", m.stride.to_string());
-            rec.row(sec, "bytes in chunk", format!("{} (offset {})", m.chunk_size, m.chunk_offset));
+            rec.row(
+                sec,
+                "bytes in chunk",
+                format!("{} (offset {})", m.chunk_size, m.chunk_offset),
+            );
             rec.row(sec, "buffer type", m.buffer_type.clone());
-            rec.row(sec, "framerate", format!("{}/{}", m.framerate.0, m.framerate.1));
+            rec.row(
+                sec,
+                "framerate",
+                format!("{}/{}", m.framerate.0, m.framerate.1),
+            );
             rec.row(sec, "dmabuf modifier", m.modifier.to_string());
-            rec.row(sec, "timestamp (pts ns)", m.pts_ns.map(|p| p.to_string()).unwrap_or_else(|| "not provided by producer".into()));
-            rec.row(sec, "sequence", m.seq.map(|p| p.to_string()).unwrap_or_else(|| "not provided".into()));
-            rec.row(sec, "empty buffers skipped first", m.skipped_buffers.to_string());
-            rec.row(sec, "stream connect -> first frame", format!("{:.1} ms", m.connect_to_frame.as_secs_f64() * 1e3));
-            rec.row(sec, "portal confirm -> first frame", m.confirm_to_frame.map(|d| format!("{:.1} ms", d.as_secs_f64() * 1e3)).unwrap_or_else(|| "n/a".into()));
+            rec.row(
+                sec,
+                "timestamp (pts ns)",
+                m.pts_ns
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "not provided by producer".into()),
+            );
+            rec.row(
+                sec,
+                "sequence",
+                m.seq
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "not provided".into()),
+            );
+            rec.row(
+                sec,
+                "empty buffers skipped first",
+                m.skipped_buffers.to_string(),
+            );
+            rec.row(
+                sec,
+                "stream connect -> first frame",
+                format!("{:.1} ms", m.connect_to_frame.as_secs_f64() * 1e3),
+            );
+            rec.row(
+                sec,
+                "portal confirm -> first frame",
+                m.confirm_to_frame
+                    .map(|d| format!("{:.1} ms", d.as_secs_f64() * 1e3))
+                    .unwrap_or_else(|| "n/a".into()),
+            );
 
-            rec.check("F1", "PipeWire stream connected + format negotiated", Status::Pass,
-                format!("{} {}x{}", m.negotiated_format, m.width, m.height));
-            rec.check("F2", "first real frame within 10s", Status::Pass,
-                format!("{:.0} ms after connect", m.connect_to_frame.as_secs_f64() * 1e3));
+            rec.check(
+                "F1",
+                "PipeWire stream connected + format negotiated",
+                Status::Pass,
+                format!("{} {}x{}", m.negotiated_format, m.width, m.height),
+            );
+            rec.check(
+                "F2",
+                "first real frame within 10s",
+                Status::Pass,
+                format!(
+                    "{:.0} ms after connect",
+                    m.connect_to_frame.as_secs_f64() * 1e3
+                ),
+            );
             let shm = m.buffer_type.contains("MemFd") || m.buffer_type.contains("MemPtr");
-            rec.check("F3", "buffer type identified (SHM, not DMA-BUF)",
+            rec.check(
+                "F3",
+                "buffer type identified (SHM, not DMA-BUF)",
                 if shm { Status::Pass } else { Status::Fail },
-                format!("{} (CPU-mapped; DMA-BUF was not requested)", m.buffer_type));
+                format!("{} (CPU-mapped; DMA-BUF was not requested)", m.buffer_type),
+            );
 
             // F4: compare with the portal-reported size, accounting for scale.
             let portal_logical = started.stream.logical_size;
@@ -460,9 +571,114 @@ async fn capture_stage(
             rec.check("F4", "frame dimensions match portal monitor", status, why);
             rec.proved(format!(
                 "received 1 real frame via portal stream node {}: {} {}x{} stride {} in {} buffer",
-                started.stream.node_id, m.negotiated_format, m.width, m.height, m.stride, m.buffer_type
+                started.stream.node_id,
+                m.negotiated_format,
+                m.width,
+                m.height,
+                m.stride,
+                m.buffer_type
             ));
             Some(c)
+        }
+    }
+}
+
+/// #15: convert the real frame (stride/format aware) and save a PNG under the
+/// gitignored out/ directory. Pixels are never printed or displayed; only the
+/// PNG header and a uniform-colour boolean are inspected.
+fn png_stage(rec: &mut Record, captured: Option<&pw::Captured>) {
+    const NO_FRAME: &str = "UNVERIFIED: no real frame was received, so no real-frame PNG exists";
+    let Some(c) = captured else {
+        rec.check(
+            "N1",
+            "PNG saved from a real frame",
+            Status::Unverified,
+            NO_FRAME,
+        );
+        rec.check(
+            "N2",
+            "PNG pixel size == frame size (no DPI scaling)",
+            Status::Unverified,
+            NO_FRAME,
+        );
+        rec.check(
+            "N3",
+            "frame is not a single uniform colour",
+            Status::Unverified,
+            NO_FRAME,
+        );
+        return;
+    };
+    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("out");
+    match frame::save_png(&c.frame, &out_dir, "a-eye-spike-04-frame.png") {
+        Ok(s) => {
+            rec.row("png", "path", s.path.display().to_string());
+            rec.row("png", "file size", format!("{} bytes", s.bytes));
+            rec.row(
+                "png",
+                "encode time",
+                format!("{:.1} ms", s.encode_time.as_secs_f64() * 1e3),
+            );
+            rec.row(
+                "png",
+                "header",
+                format!(
+                    "{}x{} {} {}",
+                    s.header.width, s.header.height, s.header.color_type, s.header.bit_depth
+                ),
+            );
+            rec.row(
+                "png",
+                "privacy",
+                "file mode 0600 in gitignored out/; contents deliberately not displayed",
+            );
+            rec.check(
+                "N1",
+                "PNG saved from a real frame",
+                Status::Pass,
+                format!("{} bytes written and header re-read", s.bytes),
+            );
+            let same = (s.header.width, s.header.height) == (c.frame.width, c.frame.height);
+            rec.check(
+                "N2",
+                "PNG pixel size == frame size (no DPI scaling)",
+                if same { Status::Pass } else { Status::Fail },
+                format!(
+                    "png {}x{} vs frame {}x{}",
+                    s.header.width, s.header.height, c.frame.width, c.frame.height
+                ),
+            );
+            let uniform = c.frame.is_uniform();
+            rec.check(
+                "N3",
+                "frame is not a single uniform colour",
+                if uniform { Status::Fail } else { Status::Pass },
+                if uniform {
+                    "every pixel identical: possible blank/black capture (heuristic)"
+                } else {
+                    "pixels vary (content not inspected)"
+                },
+            );
+            rec.proved(format!(
+                "real frame converted (stride {} -> tight RGB8) and saved as {}x{} PNG",
+                c.frame.stride, s.header.width, s.header.height
+            ));
+        }
+        Err(e) => {
+            rec.check("N1", "PNG saved from a real frame", Status::Fail, e.clone());
+            rec.check(
+                "N2",
+                "PNG pixel size == frame size (no DPI scaling)",
+                Status::Unverified,
+                "PNG not saved",
+            );
+            rec.check(
+                "N3",
+                "frame is not a single uniform colour",
+                Status::Unverified,
+                "PNG not saved",
+            );
+            rec.unknown(format!("png: {e}"));
         }
     }
 }
@@ -483,8 +699,12 @@ async fn main() {
             Status::Pass,
             "compile-time: CaptureTarget is only built from a StartedSession (see portal.rs)",
         );
-        let _captured = capture_stage(&mut rec, &started, &matched).await;
-        match started.close().await {
+        let captured = capture_stage(&mut rec, &started, &matched).await;
+        // Close the portal session first: capture is finished, so revoke the
+        // stream before spending time on encoding.
+        let closed = started.close().await;
+        png_stage(&mut rec, captured.as_ref());
+        match closed {
             Ok(()) => rec.check(
                 "S1",
                 "portal session closed",
@@ -506,7 +726,17 @@ async fn main() {
             Status::Unverified,
             "no started session to close",
         );
-        unverified_capture_checks(&mut rec, "no started portal session, so no stream to consume");
+        rec.check(
+            "M1",
+            "monitor id / scale of selected stream",
+            Status::Unverified,
+            "no started portal session, so no stream was selected",
+        );
+        unverified_capture_checks(
+            &mut rec,
+            "no started portal session, so no stream to consume",
+        );
+        png_stage(&mut rec, None);
     }
     rec.check(
         "M2",
@@ -521,6 +751,15 @@ async fn main() {
             _ => "fewer than two monitors or layout unobtainable".to_string(),
         },
     );
-    rec.row("run", "wall time", format!("{:.2}s", t0.elapsed().as_secs_f64()));
+    rec.row(
+        "run",
+        "unit tests",
+        "not executed by cargo run; see `cargo test` (synthetic frames, 10 pixel formats, padded strides)",
+    );
+    rec.row(
+        "run",
+        "wall time",
+        format!("{:.2}s", t0.elapsed().as_secs_f64()),
+    );
     print!("{}", rec.render());
 }

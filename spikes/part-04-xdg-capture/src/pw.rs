@@ -244,10 +244,7 @@ pub fn capture_one_frame(
 /// the portal. Never used by the main binary; it cannot reach the screen
 /// unless the caller passes a screen node id, so callers must only pass
 /// synthetic sources. Results from it must never be recorded as portal PASS.
-pub fn capture_synthetic_node(
-    node_id: u32,
-    timeout: Duration,
-) -> Result<Captured, CaptureError> {
+pub fn capture_synthetic_node(node_id: u32, timeout: Duration) -> Result<Captured, CaptureError> {
     run(None, node_id, timeout, None)
 }
 

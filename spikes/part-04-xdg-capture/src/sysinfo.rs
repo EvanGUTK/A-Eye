@@ -157,7 +157,8 @@ pub fn portal_info(current_desktop: &str) -> PortalInfo {
                 file: e.file_name().to_string_lossy().to_string(),
                 dbus_name: get("DBusName"),
                 use_in,
-                has_screencast: get("Interfaces").contains("org.freedesktop.impl.portal.ScreenCast"),
+                has_screencast: get("Interfaces")
+                    .contains("org.freedesktop.impl.portal.ScreenCast"),
             });
         }
     }
@@ -185,10 +186,7 @@ pub fn portal_info(current_desktop: &str) -> PortalInfo {
                     .any(|u| desktops.contains(&u.to_lowercase()))
         })
         .map(|b| {
-            let pkg_name = format!(
-                "xdg-desktop-portal-{}",
-                b.file.trim_end_matches(".portal")
-            );
+            let pkg_name = format!("xdg-desktop-portal-{}", b.file.trim_end_matches(".portal"));
             let ver = run("pacman", &["-Q", &pkg_name])
                 .unwrap_or_else(|| format!("{pkg_name} (version unknown)"));
             (b.clone(), ver)

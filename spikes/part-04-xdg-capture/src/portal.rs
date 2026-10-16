@@ -35,7 +35,10 @@ pub enum PortalError {
     /// ScreenCast interface is not offered by the portal frontend/backends.
     Unavailable(String),
     /// A portal step failed for a non-user reason.
-    Failed { stage: &'static str, message: String },
+    Failed {
+        stage: &'static str,
+        message: String,
+    },
     /// The user (or compositor) cancelled/denied the consent dialog.
     Denied,
     /// No consent decision within [`CONSENT_TIMEOUT`].
@@ -59,9 +62,9 @@ impl std::error::Error for PortalError {}
 
 fn classify(stage: &'static str, e: ashpd::Error) -> PortalError {
     match e {
-        ashpd::Error::PortalNotFound(i) => PortalError::Unavailable(format!(
-            "no portal frontend/backend implements {i}"
-        )),
+        ashpd::Error::PortalNotFound(i) => {
+            PortalError::Unavailable(format!("no portal frontend/backend implements {i}"))
+        }
         ashpd::Error::Response(ResponseError::Cancelled) => PortalError::Denied,
         other => PortalError::Failed {
             stage,
@@ -179,11 +182,7 @@ pub async fn create() -> Result<PortalCreated, PortalError> {
         .await
         .ok()
         .map(|m| format!("{m:?}"));
-    let session = with_timeout(
-        "create_session",
-        proxy.create_session(Default::default()),
-    )
-    .await?;
+    let session = with_timeout("create_session", proxy.create_session(Default::default())).await?;
     Ok(PortalCreated {
         proxy,
         session,
@@ -251,8 +250,8 @@ impl PortalSelected {
             session,
             facts,
         } = self;
-        let res = tokio::time::timeout(timeout, proxy.start(&session, None, Default::default()))
-            .await;
+        let res =
+            tokio::time::timeout(timeout, proxy.start(&session, None, Default::default())).await;
         let outcome = match res {
             Err(_) => Err(PortalError::TimedOut),
             Ok(Err(e)) => Err(classify("start (consent)", e)),
