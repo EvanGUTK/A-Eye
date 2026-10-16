@@ -58,7 +58,9 @@ pub fn exchange_code(
     redirect_uri: &str,
     timeout: Duration,
 ) -> Result<TokenSet, FlowError> {
-    let is_loopback = token_url.starts_with("http://127.0.0.1");
+    // Parsed-URL decision: cleartext only for a real loopback host, else https.
+    let parsed = crate::endpoint::require_secure_or_loopback(token_url).map_err(FlowError::Io)?;
+    let is_loopback = crate::endpoint::is_loopback_url(&parsed);
     let mut cfg = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(timeout));

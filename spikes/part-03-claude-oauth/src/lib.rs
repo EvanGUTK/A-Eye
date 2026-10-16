@@ -3,6 +3,7 @@
 //! child process. No real provider is contacted unless `--live` is passed.
 
 pub mod callback;
+pub mod endpoint;
 pub mod error;
 pub mod flow;
 pub mod handoff;

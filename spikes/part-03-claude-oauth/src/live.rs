@@ -23,6 +23,13 @@ pub fn run() -> i32 {
         eprintln!("--live requires {ENV_CLIENT_ID}, {ENV_AUTH_URL} and {ENV_TOKEN_URL} (no defaults are built in).");
         return 2;
     };
+    // Cleartext would expose the auth code + PKCE verifier and the returned tokens.
+    for (name, raw) in [(ENV_AUTH_URL, &auth_url), (ENV_TOKEN_URL, &token_url)] {
+        if let Err(e) = crate::endpoint::validate_live_endpoint(raw) {
+            eprintln!("--live refused: {name}: {e}");
+            return 2;
+        }
+    }
     eprintln!("WARNING: Anthropic's Claude Code legal/compliance page states third-party developers may not");
     eprintln!("offer claude.ai login or collect/store claude.ai credentials. Proceed only for personal,");
     eprintln!("experimental use with a provider/endpoint you are entitled to use.");
