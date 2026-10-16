@@ -1,0 +1,22 @@
+[package]
+name = "spike-03-claude-oauth"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A-Eye spike part 03: OAuth 2.0 + PKCE against a local mock server, plus env-only token handoff to an SDK-runner child process"
+
+[[bin]]
+name = "spike-03-claude-oauth"
+path = "src/main.rs"
+
+[dependencies]
+keyring = "=4.2.0"
+sha2 = "=0.11.1"
+base64 = "=0.23.1"
+getrandom = "=0.4.3"
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+url = "=2.5.8"
+serde_json = "=1.0.154"
+
+# Standalone spike: not a member of any workspace.
+[workspace]
