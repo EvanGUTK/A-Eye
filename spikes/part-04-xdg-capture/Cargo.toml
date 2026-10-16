@@ -9,7 +9,22 @@ description = "A-Eye spike 04: XDG ScreenCast portal -> PipeWire frame -> PNG"
 # Standalone spike: not part of any workspace.
 [workspace]
 
+[features]
+# Developer-only: exposes pw::capture_synthetic_node and builds the pw_selftest
+# bin. Off by default so the library API cannot capture without a StartedSession.
+dev-selftest = []
+
+[[bin]]
+name = "pw_selftest"
+path = "src/bin/pw_selftest.rs"
+required-features = ["dev-selftest"]
+
+[[bin]]
+name = "spike-04-xdg-capture"
+path = "src/main.rs"
+
 [dependencies]
+libc = "0.2"
 ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "screencast"] }
 pipewire = "=0.10.1"
 png = "=0.18.1"

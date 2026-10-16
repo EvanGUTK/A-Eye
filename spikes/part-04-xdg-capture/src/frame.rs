@@ -235,7 +235,7 @@ pub struct SavedPng {
 /// screen captures are private). Re-reads only the PNG header to verify it.
 pub fn save_png(frame: &RawFrame, dir: &std::path::Path, name: &str) -> Result<SavedPng, String> {
     use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
     let t = std::time::Instant::now();
     let png = frame.encode_png().map_err(|e| e.to_string())?;
@@ -246,14 +246,22 @@ pub fn save_png(frame: &RawFrame, dir: &std::path::Path, name: &str) -> Result<S
         .mode(0o700)
         .create(dir)
         .map_err(|e| format!("create {}: {e}", dir.display()))?;
+    // An existing directory keeps its old mode; make it private explicitly.
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("chmod {}: {e}", dir.display()))?;
     let path = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
+        // Refuse to follow a symlink planted at the final path component.
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
+    // An existing file keeps its old mode; make it private explicitly.
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("chmod {}: {e}", path.display()))?;
     f.write_all(&png)
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     drop(f);
@@ -438,6 +446,30 @@ mod tests {
         let (w, h, px) = decode(&std::fs::read(&saved.path).unwrap());
         assert_eq!((w, h), (11, 6));
         assert_eq!(&px[0..3], &expected_rgb(0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_png_refuses_symlink_and_fixes_existing_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("aeye-spike04-nofollow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let target = dir.join("victim.txt");
+        std::fs::write(&target, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join("link.png")).unwrap();
+        let f = synth(PixelFormat::Rgb, 3, 3, 0);
+        assert!(save_png(&f, &dir, "link.png").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep me");
+        // existing dir (0755) and existing file (0644) are tightened
+        std::fs::write(dir.join("old.png"), b"x").unwrap();
+        std::fs::set_permissions(dir.join("old.png"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        save_png(&f, &dir, "old.png").unwrap();
+        let m = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(m(&dir), 0o700);
+        assert_eq!(m(&dir.join("old.png")), 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -22,6 +22,17 @@ fn main() {
         eprintln!("usage: pw_selftest <synthetic-pipewire-node-id>");
         std::process::exit(2);
     };
+    // Refuse anything that is not the synthetic test node (screen nodes included).
+    let dump = std::process::Command::new("pw-dump")
+        .arg(node.to_string())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    if !dump.contains("aeye-spike04-synthetic") {
+        eprintln!("refusing: node {node} is not the synthetic node 'aeye-spike04-synthetic'");
+        std::process::exit(2);
+    }
     println!("pw_selftest: synthetic node {node} (NOT a portal stream, NOT the screen)");
     match pw::capture_synthetic_node(node, Duration::from_secs(10)) {
         Ok(c) => {

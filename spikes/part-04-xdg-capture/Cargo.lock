@@ -810,6 +810,7 @@ name = "spike-04-xdg-capture"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "libc",
  "pipewire",
  "png",
  "serde_json",

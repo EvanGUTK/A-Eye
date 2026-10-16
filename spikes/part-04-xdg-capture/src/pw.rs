@@ -239,6 +239,7 @@ pub fn capture_one_frame(
     run(Some(fd), node_id, timeout, Some(confirmed_at))
 }
 
+#[cfg(feature = "dev-selftest")]
 /// Developer self-test: consume a node of the user's default PipeWire daemon
 /// (e.g. a `gst-launch-1.0 videotestsrc ! pipewiresink` test pattern) WITHOUT
 /// the portal. Never used by the main binary; it cannot reach the screen
@@ -367,6 +368,12 @@ fn run(
             let chunk_size = d.chunk().size();
             let chunk_offset = d.chunk().offset();
             let chunk_stride = d.chunk().stride();
+            if chunk_stride < 0 {
+                s.result = Some(Err(CaptureError::BadFrame(format!(
+                    "negative chunk stride {chunk_stride} (bottom-up frames are not supported)"
+                ))));
+                return;
+            }
             let chunk_corrupt = d
                 .chunk()
                 .flags()
