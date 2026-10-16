@@ -12,6 +12,7 @@ pub const ENV_CLIENT_ID: &str = "A_EYE_OAUTH_CLIENT_ID";
 pub const ENV_AUTH_URL: &str = "A_EYE_OAUTH_AUTH_URL";
 pub const ENV_TOKEN_URL: &str = "A_EYE_OAUTH_TOKEN_URL";
 pub const ENV_SCOPE: &str = "A_EYE_OAUTH_SCOPE";
+pub const ENV_ACCOUNT: &str = "A_EYE_ACCOUNT_ID";
 pub const ENV_ACK: &str = "A_EYE_LIVE_ACK_POLICY";
 
 pub fn run() -> i32 {
@@ -47,7 +48,11 @@ pub fn run() -> i32 {
                 "token exchange OK: access_token={:?} refresh_token={:?} expires_in={:?} scope={:?}",
                 t.access_token, t.refresh_token, t.expires_in, t.scope
             );
-            println!("(not stored: credential-store handoff arrives with #12)");
+            let account = need(ENV_ACCOUNT).unwrap_or_else(|| "default".into());
+            match crate::store::store_tokens(&account, &t) {
+                Ok(()) => println!("stored in keyring: service=a-eye account={}", crate::store::account_name(&account)),
+                Err(e) => println!("UNVERIFIED: store skipped ({e}); nothing was written anywhere"),
+            }
             0
         }
         Err(e) => {
