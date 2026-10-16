@@ -227,6 +227,24 @@ fn header_meta_pod() -> Vec<u8> {
     })
 }
 
+/// Parse the buffer + meta pods and hand them to `update` (the stream's
+/// `update_params`). Any failure is returned as a message naming the real
+/// cause; nothing is swallowed.
+fn submit_buffer_params<E: std::fmt::Display>(
+    buffers: &[u8],
+    meta: &[u8],
+    update: impl FnOnce(&mut [&Pod]) -> Result<(), E>,
+) -> Result<(), String> {
+    let b = Pod::from_bytes(buffers).ok_or(
+        "buffer-restriction (MemPtr|MemFd) pod failed to parse; DMA-BUF exclusion not submitted",
+    )?;
+    let m = Pod::from_bytes(meta)
+        .ok_or("header-meta pod failed to parse; buffer restriction not submitted")?;
+    update(&mut [b, m]).map_err(|e| {
+        format!("stream.update_params rejected the buffer restriction / header meta: {e}")
+    })
+}
+
 /// Capture exactly one frame from the node the user selected in the portal.
 /// Requires a [`CaptureTarget`], which only a started portal session can mint.
 pub fn capture_one_frame(
@@ -338,11 +356,16 @@ fn run(
                     return;
                 }
             }
+            // This is the only place the MemPtr|MemFd restriction is submitted
+            // (connect() sends just the format pod), so a failure here must
+            // stop the capture with the real cause, not time out or later
+            // blame the producer.
+            // Release the borrow first: update_params can re-enter callbacks.
             drop(s);
-            let buffers = shm_buffers_pod();
-            let meta = header_meta_pod();
-            if let (Some(b), Some(m)) = (Pod::from_bytes(&buffers), Pod::from_bytes(&meta)) {
-                let _ = stream.update_params(&mut [b, m]);
+            if let Err(msg) = submit_buffer_params(&shm_buffers_pod(), &header_meta_pod(), |p| {
+                stream.update_params(p)
+            }) {
+                st.borrow_mut().stream_error = Some(msg);
             }
         })
         .process(|stream, st| {
@@ -528,6 +551,40 @@ mod tests {
         let mask = (1i32 << DataType::MemPtr.as_raw()) | (1i32 << DataType::MemFd.as_raw());
         assert_eq!(mask, 0b110);
         assert_eq!(mask & (1i32 << DataType::DmaBuf.as_raw()), 0);
+    }
+
+    #[test]
+    fn submit_buffer_params_reports_parse_and_update_failures() {
+        let good_b = shm_buffers_pod();
+        let good_m = header_meta_pod();
+
+        // success: update_params receives both pods
+        let mut seen = 0;
+        let r = submit_buffer_params(&good_b, &good_m, |p| {
+            seen = p.len();
+            Ok::<(), String>(())
+        });
+        assert!(r.is_ok());
+        assert_eq!(seen, 2);
+
+        // unparsable pods: update must NOT be called, message names the pod
+        let mut called = false;
+        let r = submit_buffer_params(&[1, 2, 3], &good_m, |_| {
+            called = true;
+            Ok::<(), String>(())
+        });
+        assert!(!called);
+        assert!(r.unwrap_err().contains("buffer-restriction"));
+        let r = submit_buffer_params(&good_b, &[], |_| Ok::<(), String>(()));
+        assert!(r.unwrap_err().contains("header-meta"));
+
+        // update_params error is surfaced with its cause
+        let r = submit_buffer_params(&good_b, &good_m, |_| Err("boom: EINVAL".to_string()));
+        let msg = r.unwrap_err();
+        assert!(
+            msg.contains("update_params") && msg.contains("boom: EINVAL"),
+            "{msg}"
+        );
     }
 
     #[test]
