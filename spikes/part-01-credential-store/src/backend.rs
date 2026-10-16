@@ -149,6 +149,8 @@ impl CredentialBackend for SecretServiceBackend {
 /// keyring daemon.
 pub struct MockSecretService {
     available: bool,
+    fail_get: bool,
+    fail_delete: bool,
     items: Mutex<HashMap<String, Zeroizing<String>>>,
 }
 
@@ -157,8 +159,23 @@ impl MockSecretService {
     pub fn new(available: bool) -> Self {
         MockSecretService {
             available,
+            fail_get: false,
+            fail_delete: false,
             items: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Simulate a keyring whose reads time out and/or whose deletes fail.
+    pub fn with_faults(fail_get: bool, fail_delete: bool) -> Self {
+        MockSecretService {
+            fail_get,
+            fail_delete,
+            ..Self::new(true)
+        }
+    }
+
+    pub fn contains(&self, account: &str) -> bool {
+        self.items.lock().expect("mock lock").contains_key(account)
     }
 
     fn check(&self) -> Result<(), BackendError> {
@@ -189,6 +206,9 @@ impl CredentialBackend for MockSecretService {
 
     fn get(&self, account: &str) -> Result<Zeroizing<String>, BackendError> {
         self.check()?;
+        if self.fail_get {
+            return Err(BackendError::Timeout);
+        }
         self.items
             .lock()
             .expect("mock lock")
@@ -199,6 +219,9 @@ impl CredentialBackend for MockSecretService {
 
     fn delete(&self, account: &str) -> Result<(), BackendError> {
         self.check()?;
+        if self.fail_delete {
+            return Err(BackendError::Timeout);
+        }
         self.items
             .lock()
             .expect("mock lock")
@@ -224,26 +247,69 @@ pub fn select_active(secret_service_usable: bool, force_file: bool) -> ActivePat
     }
 }
 
+/// Why a round trip failed, and whether it may have left an entry in the store.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RoundtripFailure {
+    pub err: BackendError,
+    /// The write call returned success.
+    pub wrote: bool,
+    /// After best-effort cleanup the entry could still exist (or a timed-out write
+    /// might still complete later). The caller must report this, never swallow it.
+    pub entry_may_remain: bool,
+}
+
+/// Best-effort delete; returns true if the entry might still exist afterwards.
+fn cleanup_may_leave(backend: &dyn CredentialBackend, account: &str) -> bool {
+    !matches!(
+        backend.delete(account),
+        Ok(()) | Err(BackendError::NotFound)
+    )
+}
+
 /// Write -> read -> compare -> delete -> confirm gone. Returns Ok(()) only if
-/// every step behaved. Never exposes the secret.
+/// every step behaved. After any failure following a successful write it attempts
+/// to delete the entry and reports whether it might remain. Never exposes the secret.
 pub fn roundtrip(
     backend: &dyn CredentialBackend,
     account: &str,
     secret: &str,
-) -> Result<(), BackendError> {
-    backend.set(account, secret)?;
-    let got = backend.get(account)?;
-    if got.as_str() != secret {
-        let _ = backend.delete(account);
-        return Err(BackendError::Other("read-back mismatch".into()));
+) -> Result<(), RoundtripFailure> {
+    if let Err(err) = backend.set(account, secret) {
+        // A timed-out write may still complete later (e.g. after a GUI unlock).
+        let entry_may_remain = err == BackendError::Timeout;
+        return Err(RoundtripFailure {
+            err,
+            wrote: false,
+            entry_may_remain,
+        });
     }
-    backend.delete(account)?;
+    let fail = |err: BackendError, entry_may_remain: bool| RoundtripFailure {
+        err,
+        wrote: true,
+        entry_may_remain,
+    };
+    let got = match backend.get(account) {
+        Ok(got) => got,
+        Err(err) => return Err(fail(err, cleanup_may_leave(backend, account))),
+    };
+    if got.as_str() != secret {
+        let remain = cleanup_may_leave(backend, account);
+        return Err(fail(
+            BackendError::Other("read-back mismatch".into()),
+            remain,
+        ));
+    }
+    if let Err(err) = backend.delete(account) {
+        let remain = !matches!(backend.get(account), Err(BackendError::NotFound));
+        return Err(fail(err, remain));
+    }
     match backend.get(account) {
         Err(BackendError::NotFound) => Ok(()),
-        Ok(_) => Err(BackendError::Other(
-            "entry still present after delete".into(),
+        Ok(_) => Err(fail(
+            BackendError::Other("entry still present after delete".into()),
+            true,
         )),
-        Err(e) => Err(e),
+        Err(e) => Err(fail(e, true)),
     }
 }
 
@@ -296,15 +362,64 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn roundtrip_cleans_up_when_read_fails_after_write() {
+        let m = MockSecretService::with_faults(true, false);
+        let f = roundtrip(&m, "test-provider:r", "AEYE-SPIKE-CANARY-r").unwrap_err();
+        assert!(f.wrote);
+        assert_eq!(f.err, BackendError::Timeout);
+        assert!(
+            !f.entry_may_remain,
+            "delete succeeded, nothing should remain"
+        );
+        assert!(!m.contains("test-provider:r"));
+    }
+
+    #[test]
+    fn roundtrip_reports_leftover_entry_when_cleanup_also_fails() {
+        let m = MockSecretService::with_faults(true, true);
+        let f = roundtrip(&m, "test-provider:r", "AEYE-SPIKE-CANARY-r").unwrap_err();
+        assert!(f.wrote && f.entry_may_remain);
+        assert!(m.contains("test-provider:r"));
+    }
+
+    #[test]
+    fn roundtrip_with_no_daemon_writes_nothing() {
+        let f = roundtrip(
+            &MockSecretService::new(false),
+            "test-provider:n",
+            "AEYE-SPIKE-CANARY-n",
+        )
+        .unwrap_err();
+        assert!(!f.wrote && !f.entry_may_remain);
+    }
+
     /// Active-backend cycle against whatever this machine really has. Uses only
-    /// a synthetic canary; a locked/absent keyring degrades to the file path
-    /// instead of failing the test.
+    /// a synthetic canary. A locked/absent keyring degrades to the file path, but a
+    /// keyring entry that might be left behind FAILS the test loudly.
     #[test]
     fn live_active_backend_cycle() {
         let ss = SecretServiceBackend::new(SS_TIMEOUT);
         let account = format!("test-provider:cargo-test-{}", std::process::id());
         let canary = format!("AEYE-SPIKE-CANARY-test-{}", std::process::id());
-        let usable = ss.store_init().is_ok() && roundtrip(&ss, &account, &canary).is_ok();
+        let mut usable = false;
+        if ss.store_init().is_ok() {
+            match roundtrip(&ss, &account, &canary) {
+                Ok(()) => usable = true,
+                Err(f) => {
+                    assert!(
+                        !f.entry_may_remain,
+                        "keyring entry may be left behind after {:?} (wrote={}); remove with: \
+                         secret-tool clear service a-eye username {account}",
+                        f.err, f.wrote
+                    );
+                    eprintln!(
+                        "UNVERIFIED: keyring round trip failed ({}); entry cleaned up; using file path",
+                        f.err
+                    );
+                }
+            }
+        }
         let dir = std::env::temp_dir().join(format!("aeye-spike01-live-{}", std::process::id()));
         let file = FileStore::new(dir.join("credentials.enc"), "pw", KdfParams::FAST_TEST);
         match select_active(usable, false) {

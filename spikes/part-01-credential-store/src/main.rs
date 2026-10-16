@@ -13,6 +13,7 @@ mod backend;
 mod filestore;
 mod scan;
 
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -671,7 +672,138 @@ fn exercise_file_fallback(rec: &mut Record, dir: &Path) {
     }
 }
 
+const USAGE: &str = "usage: spike-01-credential-store [DIR]\n\n\
+  Runs the credential-store spike and prints a capability record.\n\
+  DIR (or env AEYE_SPIKE_CRED_DIR) is where the encrypted-file fallback writes\n\
+  DIR/a-eye/credentials.enc. Default: a fresh temp directory. The spike REFUSES a DIR\n\
+  that already contains an a-eye/ entry and only ever removes paths it created itself.\n\
+  Env AEYE_SPIKE_FORCE_FILE=1 forces the encrypted-file path to be ACTIVE.\n\
+  Options: -h, --help   show this text (any other option is rejected)";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Cli {
+    Help,
+    Run(Option<PathBuf>),
+}
+
+/// Parse CLI args (without argv[0]) and the optional env directory.
+/// Anything starting with '-' other than -h/--help is rejected, never treated as a path.
+fn parse_cli(args: &[OsString], env_dir: Option<OsString>) -> Result<Cli, String> {
+    let mut positional: Vec<&OsString> = Vec::new();
+    for a in args {
+        let text = a.to_string_lossy();
+        if text == "-h" || text == "--help" {
+            return Ok(Cli::Help);
+        }
+        if text.starts_with('-') {
+            return Err(format!("unknown option {text:?}"));
+        }
+        positional.push(a);
+    }
+    if positional.len() > 1 {
+        return Err("expected at most one directory argument".into());
+    }
+    let dir = env_dir
+        .filter(|v| !v.is_empty())
+        .or_else(|| positional.first().map(|p| (*p).clone()));
+    match dir {
+        Some(d) if d.is_empty() => Err("directory argument is empty".into()),
+        Some(d) => Ok(Cli::Run(Some(PathBuf::from(d)))),
+        None => Ok(Cli::Run(None)),
+    }
+}
+
+/// The directory the encrypted-file phases may use, plus the directories this run
+/// will create (deepest first) so cleanup removes only what the spike made.
+struct Target {
+    dir: PathBuf,
+    created_dirs: Vec<PathBuf>,
+}
+
+impl Target {
+    fn file(&self) -> PathBuf {
+        self.dir.join("a-eye").join("credentials.enc")
+    }
+}
+
+/// Fail fast, before anything is written, if the target already holds credentials
+/// state we did not create.
+fn prepare_target(dir: &Path) -> Result<Target, String> {
+    let exists = |p: &Path| fs::symlink_metadata(p).is_ok();
+    let sub = dir.join("a-eye");
+    let file = sub.join("credentials.enc");
+    if exists(&file) {
+        return Err(format!(
+            "refusing to run: {} already exists (the spike never overwrites or deletes existing credentials files)",
+            file.display()
+        ));
+    }
+    if exists(&sub) {
+        return Err(format!(
+            "refusing to run: {} already exists (choose an empty directory)",
+            sub.display()
+        ));
+    }
+    if exists(dir) && !dir.is_dir() {
+        return Err(format!(
+            "refusing to run: {} is not a directory",
+            dir.display()
+        ));
+    }
+    let mut created_dirs = Vec::new();
+    let mut cur = Some(sub.as_path());
+    while let Some(p) = cur {
+        if exists(p) {
+            break;
+        }
+        created_dirs.push(p.to_path_buf());
+        cur = p.parent();
+    }
+    Ok(Target {
+        dir: dir.to_path_buf(),
+        created_dirs,
+    })
+}
+
+/// Remove only what this run created: the credentials file (and its temp file),
+/// then the directories recorded by `prepare_target`, deepest first. Non-empty
+/// directories are left alone. Returns true if everything we created is gone.
+fn cleanup_target(t: &Target) -> bool {
+    let file = t.file();
+    let _ = fs::remove_file(&file);
+    let _ = fs::remove_file(file.with_extension("enc.tmp"));
+    for d in &t.created_dirs {
+        let _ = fs::remove_dir(d);
+    }
+    !file.exists() && t.created_dirs.iter().all(|d| !d.exists())
+}
+
 fn main() {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let cli = match parse_cli(&args, std::env::var_os("AEYE_SPIKE_CRED_DIR")) {
+        Ok(Cli::Help) => {
+            println!("{USAGE}");
+            return;
+        }
+        Ok(Cli::Run(dir)) => dir,
+        Err(msg) => {
+            eprintln!("error: {msg}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
+    let dir = cli
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("aeye-spike-01-{}", random_hex(6))));
+    let target = match prepare_target(&dir) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            std::process::exit(2);
+        }
+    };
+    run(&target);
+}
+
+fn run(target: &Target) {
     eprintln!("A-Eye spike part 01: credential store (progress on stderr, record on stdout)");
     let mut rec = Record::default();
 
@@ -692,15 +824,7 @@ fn main() {
     );
     let bus = env_or("DBUS_SESSION_BUS_ADDRESS", "unset");
 
-    // ---- encrypted-file directory (never the user's real config) ----
-    let (cred_dir, owns_dir) =
-        match std::env::var_os("AEYE_SPIKE_CRED_DIR").or_else(|| std::env::args_os().nth(1)) {
-            Some(p) => (PathBuf::from(p), false),
-            None => (
-                std::env::temp_dir().join(format!("aeye-spike-01-{}", random_hex(6))),
-                true,
-            ),
-        };
+    let cred_dir = target.dir.clone();
 
     // ---- phases ----
     let ss = exercise_secret_service(&mut rec);
@@ -743,12 +867,23 @@ fn main() {
                 active_backend.name()
             ),
         ),
-        Err(e) => rec.add(
-            "ACT-01",
-            "Write/read/delete cycle on ACTIVE backend",
-            status_of_err(&e),
-            err_reason("cycle", &e),
-        ),
+        Err(f) => {
+            let mut reason = err_reason("cycle", &f.err);
+            let status = if f.entry_may_remain {
+                reason.push_str(
+                    "; an entry may remain, remove with: secret-tool clear service a-eye username <account>",
+                );
+                Status::Fail
+            } else {
+                status_of_err(&f.err)
+            };
+            rec.add(
+                "ACT-01",
+                "Write/read/delete cycle on ACTIVE backend",
+                status,
+                reason,
+            );
+        }
     }
 
     // ---- cleanup verification ("no token left behind") ----
@@ -763,13 +898,7 @@ fn main() {
             _ => left.push(acct.clone()),
         }
     }
-    let _ = fs::remove_file(cred_dir.join("a-eye").join("credentials.enc"));
-    let _ = fs::remove_dir(cred_dir.join("a-eye"));
-    if owns_dir {
-        let _ = fs::remove_dir(&cred_dir);
-    }
-    let file_gone = !cred_dir.join("a-eye").join("credentials.enc").exists()
-        && (!owns_dir || !cred_dir.exists());
+    let file_gone = cleanup_target(target);
     if !left.is_empty() {
         rec.fail("CLN-01", "No test entry left behind", format!("still present: {left:?} (remove with secret-tool clear service a-eye username <account>)"));
     } else if !file_gone {
@@ -777,17 +906,17 @@ fn main() {
             "CLN-01",
             "No test entry left behind",
             format!(
-                "temp credentials file/dir still exists under {}",
+                "credentials file/dirs created by this run still exist under {}",
                 cred_dir.display()
             ),
         );
     } else if unknown_left {
-        rec.unverified("CLN-01", "No test entry left behind", "encrypted-file temp dir removed; Secret Service cleanup could not be verified (keyring unreachable/never written)");
+        rec.unverified("CLN-01", "No test entry left behind", "encrypted-file paths created by this run removed; Secret Service cleanup could not be verified (keyring unreachable/never written)");
     } else {
         rec.pass(
             "CLN-01",
             "No test entry left behind",
-            "all Secret Service canary entries read back NotFound; encrypted-file temp dir removed",
+            "all Secret Service canary entries read back NotFound; encrypted-file paths created by this run removed",
         );
     }
 
@@ -849,7 +978,7 @@ fn print_record(
         "Credential model:  service=\"a-eye\", account=\"<provider>:<account_id>\" (synthetic canaries only)"
     );
     println!(
-        "Encrypted file:    {}/a-eye/credentials.enc (temp dir; removed at end)",
+        "Encrypted file:    {}/a-eye/credentials.enc (removed at end; only paths created by this run)",
         cred_dir.display()
     );
     println!("\nACTIVE STORAGE PATH: {active_name}\n  reason: {why}\n");
@@ -904,4 +1033,102 @@ fn print_record(
     println!(
         "============================================================================================="
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("aeye-spike01-main-{tag}-{}", random_hex(4)));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn cli_rejects_unknown_flags_and_never_treats_them_as_paths() {
+        for bad in ["--bogus", "-x", "--dir=/tmp/x", "-"] {
+            let r = parse_cli(&os(&[bad]), None);
+            assert!(r.is_err(), "{bad} accepted: {r:?}");
+        }
+        assert!(parse_cli(&os(&["/tmp/a", "/tmp/b"]), None).is_err());
+        assert!(parse_cli(&os(&[""]), None).is_err());
+    }
+
+    #[test]
+    fn cli_help_and_directory_forms() {
+        assert_eq!(parse_cli(&os(&["--help"]), None), Ok(Cli::Help));
+        assert_eq!(parse_cli(&os(&["-h"]), None), Ok(Cli::Help));
+        assert_eq!(parse_cli(&[], None), Ok(Cli::Run(None)));
+        assert_eq!(
+            parse_cli(&os(&["/tmp/d"]), None),
+            Ok(Cli::Run(Some(PathBuf::from("/tmp/d"))))
+        );
+        assert_eq!(
+            parse_cli(&[], Some("/tmp/env".into())),
+            Ok(Cli::Run(Some(PathBuf::from("/tmp/env"))))
+        );
+    }
+
+    #[test]
+    fn preexisting_credentials_file_is_refused_and_left_untouched() {
+        let d = tmp("pre-file");
+        let sub = d.join("a-eye");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("credentials.enc"), b"USER-DATA-DO-NOT-TOUCH").unwrap();
+        let err = prepare_target(&d).err().expect("must refuse");
+        assert!(err.contains("refusing"), "{err}");
+        assert_eq!(
+            fs::read(sub.join("credentials.enc")).unwrap(),
+            b"USER-DATA-DO-NOT-TOUCH"
+        );
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn preexisting_a_eye_dir_is_refused() {
+        let d = tmp("pre-dir");
+        fs::create_dir_all(d.join("a-eye")).unwrap();
+        assert!(prepare_target(&d).is_err());
+        assert!(d.join("a-eye").is_dir(), "refusal must not remove it");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn cleanup_removes_only_what_the_run_created() {
+        // Existing parent with user files: only a-eye/ (ours) may be removed.
+        let d = tmp("cleanup");
+        fs::write(d.join("keep.txt"), b"keep").unwrap();
+        let t = prepare_target(&d).unwrap();
+        assert_eq!(t.created_dirs, vec![d.join("a-eye")]);
+        fs::create_dir_all(d.join("a-eye")).unwrap();
+        fs::write(t.file(), b"ours").unwrap();
+        assert!(cleanup_target(&t));
+        assert!(!d.join("a-eye").exists());
+        assert_eq!(fs::read(d.join("keep.txt")).unwrap(), b"keep");
+
+        // Missing parent chain: all created dirs go, nothing else.
+        let nested = d.join("x").join("y");
+        let t = prepare_target(&nested).unwrap();
+        assert_eq!(t.created_dirs.len(), 3);
+        fs::create_dir_all(t.file().parent().unwrap()).unwrap();
+        fs::write(t.file(), b"ours").unwrap();
+        assert!(cleanup_target(&t));
+        assert!(!d.join("x").exists());
+        assert!(d.join("keep.txt").exists());
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn non_directory_target_is_refused() {
+        let d = tmp("notdir");
+        let f = d.join("file");
+        fs::write(&f, b"x").unwrap();
+        assert!(prepare_target(&f).is_err());
+        fs::remove_dir_all(d).unwrap();
+    }
 }
