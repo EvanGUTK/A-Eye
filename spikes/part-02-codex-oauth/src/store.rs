@@ -84,49 +84,109 @@ fn kr(e: keyring::Error) -> String {
     e.to_string()
 }
 
+/// The four keyring operations the round trip needs. A seam so failure paths
+/// (write fails, cleanup fails) can be exercised without a real keyring.
+trait Backend {
+    /// Store reachable and `account` absent.
+    fn probe(&self, account: &str) -> Result<(), String>;
+    fn write(&self, account: &str, blob: &Secret) -> Result<(), String>;
+    fn read(&self, account: &str) -> Result<String, String>;
+    /// Delete, then confirm absent.
+    fn cleanup(&self, account: &str) -> Result<(), String>;
+}
+
+struct KeyringBackend {
+    timeout: Duration,
+}
+
+impl Backend for KeyringBackend {
+    fn probe(&self, account: &str) -> Result<(), String> {
+        let acct = account.to_string();
+        with_timeout(self.timeout, move || {
+            keyring::Entry::store_status().as_ref().map_err(|e| format!("store init failed: {e}"))?;
+            let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
+            match entry.get_password() {
+                Err(keyring::Error::NoEntry) => Ok(()),
+                Ok(_) => Err("test entry unexpectedly pre-exists; refusing to touch it".to_string()),
+                Err(e) => Err(format!("probe failed: {e}")),
+            }
+        })
+    }
+
+    fn write(&self, account: &str, blob: &Secret) -> Result<(), String> {
+        let (acct, b) = (account.to_string(), blob.clone());
+        with_timeout(self.timeout, move || {
+            let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
+            entry.set_password(b.expose()).map_err(kr)
+        })
+    }
+
+    fn read(&self, account: &str) -> Result<String, String> {
+        let acct = account.to_string();
+        with_timeout(self.timeout, move || {
+            keyring::Entry::new(SERVICE, &acct).map_err(kr)?.get_password().map_err(kr)
+        })
+    }
+
+    fn cleanup(&self, account: &str) -> Result<(), String> {
+        let acct = account.to_string();
+        with_timeout(self.timeout, move || {
+            let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(e) => return Err(format!("delete failed: {e}")),
+            }
+            match entry.get_password() {
+                Err(keyring::Error::NoEntry) => Ok(()),
+                Ok(_) => Err("entry still present after delete".to_string()),
+                Err(e) => Err(format!("post-delete probe failed: {e}")),
+            }
+        })
+    }
+}
+
+/// Text appended to a failure reason when a test entry may still be in the keyring.
+fn leftover_note(account: &str, cleanup_err: &str) -> String {
+    format!(
+        "test entry {SERVICE}/{account} may remain ({cleanup_err}); remove it with: \
+         secret-tool clear service {SERVICE} username {account}"
+    )
+}
+
 /// Write -> read back -> compare -> delete -> confirm gone, for one synthetic entry.
 pub fn roundtrip(tokens: &TokenSet, timeout: Duration) -> StoreReport {
+    roundtrip_with(&KeyringBackend { timeout }, tokens)
+}
+
+fn roundtrip_with(backend: &dyn Backend, tokens: &TokenSet) -> StoreReport {
     let account_id = test_account_id();
     let account = account_name(&account_id);
     let blob = credential_blob(tokens);
     let mut steps = Vec::new();
 
-    // 1. Store reachable + entry must not pre-exist.
-    let acct = account.clone();
-    let pre = with_timeout(timeout, move || {
-        keyring::Entry::store_status().as_ref().map_err(|e| format!("store init failed: {e}"))?;
-        let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
-        match entry.get_password() {
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Ok(_) => Err("test entry unexpectedly pre-exists; refusing to touch it".to_string()),
-            Err(e) => Err(format!("probe failed: {e}")),
-        }
-    });
-    match pre {
+    // 1. Store reachable + entry must not pre-exist. Nothing was written yet, so
+    //    failing here claims nothing about the store: Skipped.
+    match backend.probe(&account) {
         Ok(()) => steps.push(format!("Secret Service reachable; fresh entry {SERVICE}/{account} absent")),
         Err(e) => return StoreReport::Skipped { reason: format!("store unusable before write: {e}") },
     }
 
-    // 2. Write.
-    let (acct, b) = (account.clone(), blob.clone());
-    let wrote = with_timeout(timeout, move || {
-        let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
-        entry.set_password(b.expose()).map_err(kr)
-    });
-    if let Err(e) = wrote {
-        // Best-effort cleanup in case the write landed after the timeout.
-        let _ = cleanup(&account, timeout);
-        return StoreReport::Skipped { reason: format!("write failed: {e}") };
+    // 2. Write. The store answered the probe, so a failure here is a misbehaving
+    //    store (Failed), and a timed-out write may still land later, so always
+    //    attempt cleanup and report it if that fails too.
+    if let Err(e) = backend.write(&account, &blob) {
+        let mut reason = format!("write failed: {e}");
+        match backend.cleanup(&account) {
+            Ok(()) => steps.push("cleanup after failed write: entry confirmed absent".into()),
+            Err(ce) => reason = format!("{reason}; {}", leftover_note(&account, &ce)),
+        }
+        return StoreReport::Failed { reason, steps };
     }
     steps.push(format!("wrote {} byte credential blob (synthetic tokens)", blob.expose().len()));
 
     // 3. Read back and compare.
-    let acct = account.clone();
-    let read = with_timeout(timeout, move || {
-        keyring::Entry::new(SERVICE, &acct).map_err(kr)?.get_password().map_err(kr)
-    });
     let mut failure = None;
-    match read {
+    match backend.read(&account) {
         Ok(got) if got == blob.expose() => {
             steps.push("read back: byte-identical to what was written".into())
         }
@@ -135,13 +195,14 @@ pub fn roundtrip(tokens: &TokenSet, timeout: Duration) -> StoreReport {
     }
 
     // 4. Always delete, then confirm gone.
-    match cleanup(&account, timeout) {
+    match backend.cleanup(&account) {
         Ok(()) => steps.push("deleted test entry; confirmed absent".into()),
         Err(e) => {
-            return StoreReport::Failed {
-                reason: format!("cleanup failed, test entry {SERVICE}/{account} may remain: {e}"),
-                steps,
-            };
+            let mut reason = leftover_note(&account, &e);
+            if let Some(f) = failure {
+                reason = format!("{f}; {reason}");
+            }
+            return StoreReport::Failed { reason, steps };
         }
     }
 
@@ -149,22 +210,6 @@ pub fn roundtrip(tokens: &TokenSet, timeout: Duration) -> StoreReport {
         None => StoreReport::Verified { account, steps },
         Some(reason) => StoreReport::Failed { reason, steps },
     }
-}
-
-fn cleanup(account: &str, timeout: Duration) -> Result<(), String> {
-    let acct = account.to_string();
-    with_timeout(timeout, move || {
-        let entry = keyring::Entry::new(SERVICE, &acct).map_err(kr)?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(e) => return Err(format!("delete failed: {e}")),
-        }
-        match entry.get_password() {
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Ok(_) => Err("entry still present after delete".to_string()),
-            Err(e) => Err(format!("post-delete probe failed: {e}")),
-        }
-    })
 }
 
 #[cfg(test)]
@@ -217,5 +262,101 @@ mod tests {
         assert_eq!(with_timeout(Duration::from_secs(2), || Ok(7)), Ok(7));
         let r: Result<(), String> = with_timeout(Duration::from_secs(2), || panic!("boom"));
         assert!(r.unwrap_err().contains("panicked"));
+    }
+
+    struct Fake {
+        write: Result<(), String>,
+        read: Result<String, String>,
+        cleanup: Result<(), String>,
+        calls: std::cell::RefCell<Vec<&'static str>>,
+    }
+
+    impl Fake {
+        fn new(write: Result<(), String>, cleanup: Result<(), String>) -> Self {
+            Fake { write, read: Ok(String::new()), cleanup, calls: Default::default() }
+        }
+    }
+
+    impl Backend for Fake {
+        fn probe(&self, _: &str) -> Result<(), String> {
+            self.calls.borrow_mut().push("probe");
+            Ok(())
+        }
+        fn write(&self, _: &str, _: &Secret) -> Result<(), String> {
+            self.calls.borrow_mut().push("write");
+            self.write.clone()
+        }
+        fn read(&self, _: &str) -> Result<String, String> {
+            self.calls.borrow_mut().push("read");
+            self.read.clone()
+        }
+        fn cleanup(&self, _: &str) -> Result<(), String> {
+            self.calls.borrow_mut().push("cleanup");
+            self.cleanup.clone()
+        }
+    }
+
+    fn toks() -> TokenSet {
+        parse_token_response(br#"{"access_token":"AT","refresh_token":"RT"}"#, SystemTime::UNIX_EPOCH).unwrap()
+    }
+
+    #[test]
+    fn write_failure_with_cleanup_failure_is_failed_and_names_leftover() {
+        let f = Fake::new(Err("write timed out".into()), Err("delete failed: locked".into()));
+        match roundtrip_with(&f, &toks()) {
+            StoreReport::Failed { reason, steps } => {
+                assert!(reason.contains("write failed: write timed out"), "{reason}");
+                assert!(reason.contains("may remain") && reason.contains("delete failed: locked"), "{reason}");
+                assert!(reason.contains("secret-tool clear service a-eye username codex:spike02-test-"), "{reason}");
+                assert_eq!(steps.len(), 1, "probe step must be preserved: {steps:?}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(*f.calls.borrow(), ["probe", "write", "cleanup"]);
+    }
+
+    #[test]
+    fn write_failure_with_clean_cleanup_is_failed_without_leftover_wording() {
+        let f = Fake::new(Err("denied".into()), Ok(()));
+        match roundtrip_with(&f, &toks()) {
+            StoreReport::Failed { reason, steps } => {
+                assert!(reason.contains("write failed: denied"), "{reason}");
+                assert!(!reason.contains("may remain") && !reason.contains("secret-tool"), "{reason}");
+                assert!(steps.iter().any(|s| s.contains("confirmed absent")), "{steps:?}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn readback_mismatch_and_cleanup_failure_report_both() {
+        let mut f = Fake::new(Ok(()), Err("still present".into()));
+        f.read = Ok("something else".into());
+        match roundtrip_with(&f, &toks()) {
+            StoreReport::Failed { reason, .. } => {
+                assert!(reason.contains("read back differs") && reason.contains("may remain"), "{reason}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn probe_failure_stays_skipped_and_writes_nothing() {
+        struct Dead;
+        impl Backend for Dead {
+            fn probe(&self, _: &str) -> Result<(), String> {
+                Err("no Secret Service".into())
+            }
+            fn write(&self, _: &str, _: &Secret) -> Result<(), String> {
+                panic!("must not write when the store is unusable")
+            }
+            fn read(&self, _: &str) -> Result<String, String> {
+                unreachable!()
+            }
+            fn cleanup(&self, _: &str) -> Result<(), String> {
+                unreachable!()
+            }
+        }
+        assert!(matches!(roundtrip_with(&Dead, &toks()), StoreReport::Skipped { .. }));
     }
 }
