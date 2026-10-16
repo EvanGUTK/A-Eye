@@ -80,3 +80,84 @@ Follow-pointer mode, window capture, macOS, Wayland/Linux, local-only vision, br
 | 10 | Scope reset | Re-estimated backlog based on evidence |
 
 This is a suggested sequence, not a claim that all experiments will fit the time box. If blocked, record the result and revisit the scope.
+
+---
+
+## Phase 0 — Linux spikes (active development target)
+
+ADR-013 supersedes the Windows-first assumption for the current build. The spikes
+below replace or supplement the original Phase 0 items for Arch Linux / Wayland.
+See [LINUX.md](../architecture/LINUX.md), [OAUTH.md](../architecture/OAUTH.md),
+and [LOCAL-MODEL.md](../architecture/LOCAL-MODEL.md) for full context.
+
+**L0.1 XDG ScreenCast portal + PipeWire frame capture**
+Use `ashpd` to open a portal session, select one monitor, consume the PipeWire
+stream, extract one frame, save as PNG. Test on two monitors with different
+scale factors. Record: portal dialog behavior, frame format (DMA-BUF vs SHM),
+latency from portal confirm to first frame, any compositor-specific quirks.
+
+**L0.2 wlr-layer-shell orange border overlay**
+Using `smithay-client-toolkit`, draw a 2-logical-pixel orange border on the
+selected monitor. Verify: no focus steal, no pointer interception, survives
+monitor hotplug, survives compositor restart. Test on Hyprland and at least
+one other compositor. Record: which compositors support `zwlr_layer_shell_v1`.
+
+**L0.3 libsecret credential storage**
+Write and read a test credential via `keyring` crate (Secret Service D-Bus).
+Verify it does not appear in plaintext on disk. Test the encrypted-file fallback
+path on a system without a keyring daemon (bare WM). Record setup steps for
+the `input` group requirement if applicable.
+
+**L0.4 OAuth PKCE flow — Codex (ChatGPT subscription)**
+Complete the full PKCE flow against OpenAI auth in a standalone Rust binary.
+Store token via L0.3 credential store. Start Codex app-server daemon. Send one
+synthetic text + image turn via the Unix socket. Receive and parse the response.
+Record: exact client_id, token endpoint, socket protocol version, image input
+format, session resumability. See [OAUTH.md](../architecture/OAUTH.md).
+
+**L0.5 OAuth PKCE flow — Claude (claude.ai subscription)**
+Same as L0.4 but against Claude auth. Use the Claude Agent SDK with the stored
+token. Send one text + image turn in managed mode. Record: auth endpoint,
+token lifetime, SDK version, managed session binding behavior.
+
+**L0.6 Local model — Ollama vision spike**
+Install Ollama on Arch. Pull `moondream2` and `minicpm-v:8b`. Capture one crop
+from a running synthetic UI (a simple demo web page). Send to each model via
+the `/v1/chat/completions` endpoint. Record: inference latency p50/p95 on target
+GPU, description quality on UI text, GPU memory usage during concurrent
+capture + inference. Establish whether local model adds meaningful evidence
+quality over pure pixel diff. See [LOCAL-MODEL.md](../architecture/LOCAL-MODEL.md).
+
+**L0.7 evdev global hotkey on Wayland**
+Read a key event from `/dev/input/eventN` without window focus using `evdev-rs`.
+Verify the `input` group membership requirement. Test push-to-talk hotkey
+detection while another application has focus. Document the polkit alternative
+for systems where group membership is undesirable.
+
+**L0.8 Tauri 2 + AppImage packaging on Arch**
+Produce a minimal Tauri 2 app (just the dock shell, no real capture) as an
+AppImage. Install on a second clean Arch VM. Verify launch, WebKitGTK version,
+Wayland surface rendering. Record: binary size, startup time, WebKitGTK
+dependency chain.
+
+### Linux Phase 0 exit gate
+
+Written capability matrix covering all L0.x items; exact tested versions for
+Rust toolchain, Node LTS, Tauri, compositor, GPU driver, Ollama, model weights;
+synthetic fixture outputs for capture, auth, and local model; selected packaging
+path; resolved ADR-003 (Tauri vs Electron) based on L0.8 evidence.
+
+### Linux first ten working days (revised)
+
+| Day range | Focus | Concrete output |
+|---|---|---|
+| 1 | Portal + PipeWire frame (L0.1) | PNG saved from live monitor |
+| 2 | Layer-shell overlay (L0.2) | Orange border on selected monitor |
+| 3 | Credential store (L0.3) | Token written + read; fallback tested |
+| 4 | Codex OAuth + app-server (L0.4) | Text + image round trip recorded |
+| 5 | Claude OAuth + SDK (L0.5) | Managed session turn recorded |
+| 6 | Ollama vision (L0.6) | Latency + quality numbers on GPU |
+| 7 | evdev hotkey (L0.7) | Push-to-talk fires without window focus |
+| 8 | Tauri + AppImage (L0.8) | Installs and launches on clean Arch VM |
+| 9 | Threat + failure review | Scope/stop tests; epoch revocation proved |
+| 10 | Scope reset | Re-estimated backlog from evidence |

@@ -53,3 +53,41 @@ If an image fails to deliver, say so. A transcript plus missing image is not a s
 ## Compatibility record
 
 For every released adapter record OS/build, runtime version, model capability, authentication route, transport, image fixture result, resumed-turn result, approval denial result, interrupted-turn result, and known limitations. Re-run on upgrades. Never turn a documentation observation into a green support badge.
+
+---
+
+## Linux and OAuth addendum
+
+See [OAUTH.md](OAUTH.md) for the full OAuth implementation plan.
+See [LOCAL-MODEL.md](LOCAL-MODEL.md) for the local Ollama layer.
+
+### Updated capability matrix (Linux / OAuth / local model)
+
+| Capability | Codex (OAuth) | Claude (OAuth) | Grok (API key) | Ollama (local) |
+|---|---|---|---|---|
+| Auth method | OAuth PKCE (ChatGPT sub) | OAuth PKCE (claude.ai sub) | API key | None |
+| Linux support | Yes (CLI is cross-platform) | Yes (SDK is cross-platform) | Yes (HTTP API) | Yes (native) |
+| Image input | Documented; validate version | Documented; validate version | Supported (grok-2-vision) | Yes (minicpm-v, moondream2) |
+| Role in A-Eye | Coding agent (managed) | Coding agent (managed) | Coding agent (managed / API) | Internal evidence intelligence only |
+| Conversation continuity | Socket session | SDK session binding | Stateless (per request) | N/A |
+| Code actions | Yes (approval-gated) | Yes (approval-gated) | Yes (approval-gated) | No — read-only |
+| Cost | Subscription (included) | Subscription (included) | Per-token API cost | Free (local compute) |
+
+### Two-tier model architecture (ADR-017)
+
+A-Eye separates two model roles that must never be conflated:
+
+**Tier 1 — Local model (Ollama):** Runs on-device inside A-Eye's core pipeline.
+Handles frame change detection, evidence scoring, and initial visual description.
+Fast, free, private. Cannot write code, approve actions, or access the repo.
+
+**Tier 2 — Coding agent (Claude / Codex / Grok):** Receives the curated
+evidence bundle that Tier 1 selected. Does repository-aware investigation,
+code editing, and approval-gated actions. Authenticated via OAuth or API key.
+
+```
+Screen frames → [Ollama: select + describe] → Evidence bundle → [Claude/Codex/Grok: code work]
+```
+
+The two tiers are configured independently in Settings and can be changed
+without affecting each other.
