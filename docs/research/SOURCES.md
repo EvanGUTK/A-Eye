@@ -22,6 +22,10 @@ Reviewed **2026-10-15**. Documentation observations are not integration test res
 | S16 | [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) | Official framework entry point | Future discovery only; detailed behavior not established |
 | S17 | [XDG ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html) | User-selected sessions and PipeWire streams | Linux needs portal/compositor-specific work |
 | S18 | [Screenpipe docs](https://docs.screenpipe.com/home) | Adjacent screen/audio memory product | Screen-aware AI itself is not a novelty claim |
+| S19 | [XDG ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html) | User-consent screen capture on Wayland via D-Bus portal | Primary Linux capture backend; supersedes S17 entry as active target |
+| S20 | [ashpd crate](https://docs.rs/ashpd) | Rust bindings for XDG desktop portals including ScreenCast | Candidate crate for portal session management |
+| S21 | [smithay-client-toolkit](https://docs.rs/smithay-client-toolkit) | Wayland client toolkit including wlr-layer-shell support | Candidate crate for orange border overlay surface |
+| S22 | [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) | OpenAI-compatible local inference API | Local model tier; image input via `/v1/chat/completions` |
 
 ## Evidence discipline
 

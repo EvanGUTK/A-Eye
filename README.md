@@ -79,6 +79,7 @@ python scripts/check_docs.py
 | Evidence | [Findings](docs/research/FINDINGS.md), [sources](docs/research/SOURCES.md) |
 | Structure | [System](docs/architecture/SYSTEM.md), [flows](docs/architecture/FLOWS.md), [repository layout](docs/architecture/REPOSITORY.md) |
 | Specification | [Stack](docs/architecture/STACK.md), [agents](docs/architecture/AGENT-INTEGRATIONS.md), [capture](docs/architecture/CAPTURE.md), [voice](docs/architecture/VOICE.md), [contracts](docs/architecture/CONTRACTS.md) |
+| Linux platform | [Linux architecture](docs/architecture/LINUX.md), [OAuth](docs/architecture/OAUTH.md), [local model](docs/architecture/LOCAL-MODEL.md) |
 | Interface | [Experience](docs/design/EXPERIENCE.md), [build brief](docs/design/BUILD-BRIEF.md) |
 | Delivery | [Roadmap](docs/planning/ROADMAP.md), [backlog](docs/planning/BACKLOG.md), [quality](docs/planning/QUALITY.md), [risks](docs/planning/RISKS.md) |
 | Decisions | [Decision record](docs/decisions/README.md) |
