@@ -26,7 +26,10 @@ use ashpd::desktop::screencast::{
 use ashpd::desktop::{PersistMode, ResponseError, Session};
 use ashpd::enumflags2::BitFlags;
 
-/// Hard upper bound for the consent step. The run can never hang past this.
+/// Consent budget shared by SelectSources + Start (the interactive calls).
+/// Non-interactive steps and the error-path session close each have their own
+/// [`STEP_TIMEOUT`] (10s), so the worst case for the whole portal stage is
+/// 90s + 10s, never unbounded.
 pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(90);
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -233,6 +236,107 @@ pub async fn create() -> Result<PortalCreated, PortalError> {
     })
 }
 
+/// Pending portal reply to SelectSources. ashpd hands this back as
+/// `Ok(Request)` even when the portal answered Cancelled; the verdict is only
+/// in `response()`.
+trait SelectReply {
+    fn response(&self) -> Result<(), ashpd::Error>;
+}
+
+/// Pending portal reply to Start.
+trait StartReply {
+    fn streams(&self) -> Result<Vec<StreamInfo>, ashpd::Error>;
+}
+
+impl SelectReply for ashpd::desktop::Request<()> {
+    fn response(&self) -> Result<(), ashpd::Error> {
+        ashpd::desktop::Request::response(self)
+    }
+}
+
+impl StartReply for ashpd::desktop::Request<ashpd::desktop::screencast::Streams> {
+    fn streams(&self) -> Result<Vec<StreamInfo>, ashpd::Error> {
+        let r = self.response()?;
+        Ok(r.streams().iter().map(StreamInfo::from_stream).collect())
+    }
+}
+
+/// The two interactive portal calls, as a seam so the call-site wiring
+/// (await response, map errors, close the session, share one deadline) is
+/// unit-testable with a fake portal.
+trait ScreencastApi {
+    type Session: Closable;
+    type Select: SelectReply;
+    type Start: StartReply;
+    async fn select_sources(
+        &self,
+        session: &Self::Session,
+        opts: SelectSourcesOptions,
+    ) -> Result<Self::Select, ashpd::Error>;
+    async fn start(&self, session: &Self::Session) -> Result<Self::Start, ashpd::Error>;
+}
+
+struct RealApi<'a>(&'a Screencast);
+
+impl ScreencastApi for RealApi<'_> {
+    type Session = Session<Screencast>;
+    type Select = ashpd::desktop::Request<()>;
+    type Start = ashpd::desktop::Request<ashpd::desktop::screencast::Streams>;
+    async fn select_sources(
+        &self,
+        session: &Self::Session,
+        opts: SelectSourcesOptions,
+    ) -> Result<Self::Select, ashpd::Error> {
+        self.0.select_sources(session, opts).await
+    }
+    async fn start(&self, session: &Self::Session) -> Result<Self::Start, ashpd::Error> {
+        self.0.start(session, None, Default::default()).await
+    }
+}
+
+/// SelectSources under the shared consent `deadline`: awaits the reply's
+/// verdict, maps Cancelled to `Denied` and a missed deadline to `TimedOut`,
+/// and closes the session on any error.
+async fn do_select<A: ScreencastApi>(
+    api: &A,
+    session: &A::Session,
+    opts: SelectSourcesOptions,
+    deadline: Instant,
+) -> Result<(), PortalError> {
+    let timed = tokio::time::timeout_at(deadline.into(), async {
+        let request = api.select_sources(session, opts).await?;
+        request.response()
+    })
+    .await;
+    close_on_error(session, resolve("select_sources", timed)).await
+}
+
+/// Start under the same `deadline`; yields the first selected stream and the
+/// stream count, closing the session on any error (including "no streams").
+async fn do_start<A: ScreencastApi>(
+    api: &A,
+    session: &A::Session,
+    deadline: Instant,
+) -> Result<(StreamInfo, usize), PortalError> {
+    let timed = tokio::time::timeout_at(deadline.into(), async {
+        let request = api.start(session).await?;
+        request.streams()
+    })
+    .await;
+    let outcome = resolve("start (consent)", timed).and_then(|mut streams| {
+        let count = streams.len();
+        if streams.is_empty() {
+            Err(PortalError::Failed {
+                stage: "start (consent)",
+                message: "portal returned no streams".to_string(),
+            })
+        } else {
+            Ok((streams.remove(0), count))
+        }
+    });
+    close_on_error(session, outcome).await
+}
+
 impl PortalCreated {
     /// Request monitor capture (not window). Cursor: hidden when offered
     /// (pointer position is tracked separately by A-Eye; see CAPTURE.md),
@@ -270,12 +374,7 @@ impl PortalCreated {
             .set_cursor_mode(cursor)
             .set_persist_mode(PersistMode::DoNot)
             .set_restore_token(None);
-        let timed = tokio::time::timeout_at(deadline.into(), async {
-            let request = self.proxy.select_sources(&self.session, opts).await?;
-            request.response()
-        })
-        .await;
-        let r = close_on_error(&self.session, resolve("select_sources", timed)).await;
+        let r = do_select(&RealApi(&self.proxy), &self.session, opts, deadline).await;
         r.map(|()| PortalSelected {
             proxy: self.proxy,
             session: self.session,
@@ -295,20 +394,7 @@ impl PortalSelected {
             facts,
             deadline,
         } = self;
-        let timed = tokio::time::timeout_at(deadline.into(), async {
-            let request = proxy.start(&session, None, Default::default()).await?;
-            request.response()
-        })
-        .await;
-        let outcome =
-            resolve("start (consent)", timed).and_then(|streams| match streams.streams().first() {
-                None => Err(PortalError::Failed {
-                    stage: "start (consent)",
-                    message: "portal returned no streams".to_string(),
-                }),
-                Some(s) => Ok((StreamInfo::from_stream(s), streams.streams().len())),
-            });
-        match close_on_error(&session, outcome).await {
+        match do_start(&RealApi(&proxy), &session, deadline).await {
             Ok((stream, stream_count)) => Ok(StartedSession {
                 proxy,
                 session,
@@ -384,6 +470,158 @@ mod tests {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
+    }
+
+    use std::cell::RefCell;
+
+    type SelectOutcome = Result<(), ashpd::Error>;
+    type StartOutcome = Result<Vec<StreamInfo>, ashpd::Error>;
+
+    struct FakeSelectReply(RefCell<Option<SelectOutcome>>);
+    impl SelectReply for FakeSelectReply {
+        fn response(&self) -> SelectOutcome {
+            self.0.borrow_mut().take().expect("response read once")
+        }
+    }
+    struct FakeStartReply(RefCell<Option<StartOutcome>>);
+    impl StartReply for FakeStartReply {
+        fn streams(&self) -> StartOutcome {
+            self.0.borrow_mut().take().expect("streams read once")
+        }
+    }
+
+    /// Fake portal. `select_*`: the call itself returns Ok(reply) after
+    /// `select_delay`, with the verdict hidden inside the reply (as ashpd does).
+    struct FakeApi {
+        select_delay: Duration,
+        select_verdict: RefCell<Option<SelectOutcome>>,
+        start_hangs: bool,
+        start_verdict: RefCell<Option<StartOutcome>>,
+    }
+    impl FakeApi {
+        fn new(select: SelectOutcome) -> Self {
+            Self {
+                select_delay: Duration::ZERO,
+                select_verdict: RefCell::new(Some(select)),
+                start_hangs: false,
+                start_verdict: RefCell::new(None),
+            }
+        }
+    }
+    impl ScreencastApi for FakeApi {
+        type Session = FakeSession;
+        type Select = FakeSelectReply;
+        type Start = FakeStartReply;
+        async fn select_sources(
+            &self,
+            _: &FakeSession,
+            _: SelectSourcesOptions,
+        ) -> Result<FakeSelectReply, ashpd::Error> {
+            tokio::time::sleep(self.select_delay).await;
+            Ok(FakeSelectReply(RefCell::new(self.select_verdict.take())))
+        }
+        async fn start(&self, _: &FakeSession) -> Result<FakeStartReply, ashpd::Error> {
+            if self.start_hangs {
+                std::future::pending::<()>().await;
+            }
+            Ok(FakeStartReply(RefCell::new(self.start_verdict.take())))
+        }
+    }
+
+    fn cancelled() -> ashpd::Error {
+        ashpd::Error::Response(ResponseError::Cancelled)
+    }
+
+    fn stream(node: u32) -> StreamInfo {
+        StreamInfo {
+            node_id: node,
+            logical_size: Some((1600, 900)),
+            position: Some((0, 0)),
+            source_type: Some("Monitor".into()),
+            stream_id: None,
+        }
+    }
+
+    fn soon(ms: u64) -> Instant {
+        Instant::now() + Duration::from_millis(ms)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn b1_select_ok_request_with_cancelled_response_is_denied_and_closes() {
+        let api = FakeApi::new(Err(cancelled()));
+        let session = FakeSession(Default::default());
+        let r = do_select(&api, &session, Default::default(), soon(1000)).await;
+        assert!(matches!(r, Err(PortalError::Denied)), "got {r:?}");
+        assert_eq!(session.0.get(), 1, "session must be closed after denial");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn b1_select_ok_keeps_session_open() {
+        let api = FakeApi::new(Ok(()));
+        let session = FakeSession(Default::default());
+        assert!(do_select(&api, &session, Default::default(), soon(1000))
+            .await
+            .is_ok());
+        assert_eq!(session.0.get(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_denied_no_streams_and_success_paths() {
+        let session = FakeSession(Default::default());
+        let mut api = FakeApi::new(Ok(()));
+        *api.start_verdict.get_mut() = Some(Err(cancelled()));
+        let r = do_start(&api, &session, soon(1000)).await;
+        assert!(matches!(r, Err(PortalError::Denied)), "got {r:?}");
+        assert_eq!(session.0.get(), 1);
+
+        let session = FakeSession(Default::default());
+        let mut api = FakeApi::new(Ok(()));
+        *api.start_verdict.get_mut() = Some(Ok(vec![]));
+        let r = do_start(&api, &session, soon(1000)).await;
+        assert!(matches!(r, Err(PortalError::Failed { .. })), "got {r:?}");
+        assert_eq!(session.0.get(), 1, "no streams must close the session");
+
+        let session = FakeSession(Default::default());
+        let mut api = FakeApi::new(Ok(()));
+        *api.start_verdict.get_mut() = Some(Ok(vec![stream(42), stream(43)]));
+        let (first, count) = do_start(&api, &session, soon(1000)).await.unwrap();
+        assert_eq!((first.node_id, count), (42, 2));
+        assert_eq!(session.0.get(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn b2_one_deadline_spans_select_and_start() {
+        // SelectSources takes 60ms of a 120ms budget and succeeds; Start never
+        // answers. Start must time out at the *shared* deadline, not get a
+        // fresh budget, and the session must be closed.
+        let mut api = FakeApi::new(Ok(()));
+        api.select_delay = Duration::from_millis(60);
+        api.start_hangs = true;
+        let session = FakeSession(Default::default());
+        let t0 = Instant::now();
+        let deadline = t0 + Duration::from_millis(120);
+        do_select(&api, &session, Default::default(), deadline)
+            .await
+            .expect("select within budget");
+        assert_eq!(session.0.get(), 0);
+        let r = do_start(&api, &session, deadline).await;
+        let elapsed = t0.elapsed();
+        assert!(matches!(r, Err(PortalError::TimedOut)), "got {r:?}");
+        assert!(
+            elapsed >= Duration::from_millis(110) && elapsed < Duration::from_millis(400),
+            "expected ~120ms total, got {elapsed:?}"
+        );
+        assert_eq!(session.0.get(), 1, "timeout must close the session");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn b2_select_slower_than_budget_times_out_and_closes() {
+        let mut api = FakeApi::new(Ok(()));
+        api.select_delay = Duration::from_secs(30);
+        let session = FakeSession(Default::default());
+        let r = do_select(&api, &session, Default::default(), soon(50)).await;
+        assert!(matches!(r, Err(PortalError::TimedOut)), "got {r:?}");
+        assert_eq!(session.0.get(), 1);
     }
 
     #[test]
