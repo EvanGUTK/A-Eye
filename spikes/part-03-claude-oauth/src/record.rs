@@ -68,6 +68,10 @@ fn unverified(id: &'static str, name: &'static str, reason: &str) -> Check {
     Check { id, name, status: Status::Unverified, kind: Kind::Finding, reason: reason.into() }
 }
 
+fn local_unverified(id: &'static str, name: &'static str, reason: &str) -> Check {
+    Check { kind: Kind::Local, ..unverified(id, name, reason) }
+}
+
 fn cmd_out(program: &str, args: &[&str]) -> Option<String> {
     let (p, a): (String, Vec<String>) = (program.into(), args.iter().map(|s| s.to_string()).collect());
     store::with_timeout(Duration::from_secs(15), move || {
@@ -88,6 +92,51 @@ fn os_pretty_name() -> String {
                 .map(|v| v.trim_matches('"').to_string())
         })
         .unwrap_or_else(|| "unknown".into())
+}
+
+fn cpu_model() -> String {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("model name"))
+                .map(|v| v.trim_start_matches([' ', '\t', ':']).trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// GPU names from `lspci` when present, plus sysfs vendor:device and kernel driver.
+fn gpu_summary() -> String {
+    let mut parts: Vec<String> = cmd_out("lspci", &[])
+        .map(|o| {
+            o.lines()
+                .filter(|l| l.contains("VGA") || l.contains("3D controller") || l.contains("Display controller"))
+                .filter_map(|l| l.split_once(": ").map(|(_, n)| n.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Ok(rd) = std::fs::read_dir("/sys/class/drm") {
+        let mut cards: Vec<String> = rd
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("card") && n[4..].chars().all(|c| c.is_ascii_digit()))
+            .collect();
+        cards.sort();
+        for c in cards {
+            let base = format!("/sys/class/drm/{c}/device");
+            let rd = |f: &str| std::fs::read_to_string(format!("{base}/{f}")).unwrap_or_default().trim().to_string();
+            let drv = std::fs::read_link(format!("{base}/driver"))
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "?".into());
+            parts.push(format!("[{c} {}:{} driver={drv}]", rd("vendor"), rd("device")));
+        }
+    }
+    if parts.is_empty() {
+        "unknown".into()
+    } else {
+        parts.join("; ")
+    }
 }
 
 // ---- individual checks ------------------------------------------------------
@@ -220,7 +269,7 @@ fn c_keyring(tokens: &crate::token::TokenSet) -> (Check, Option<Secret>) {
     const ID: &str = "C07";
     const NAME: &str = "keyring store/load/delete (service a-eye, account claude:<id>)";
     if let Err(e) = store::store_status() {
-        return (unverified(ID, NAME, &format!("UNVERIFIED: store skipped ({e})")), None);
+        return (local_unverified(ID, NAME, &format!("UNVERIFIED: store skipped ({e})")), None);
     }
     match store::roundtrip(tokens) {
         Ok(r) if r.matched && r.deleted_and_gone => (
@@ -229,7 +278,7 @@ fn c_keyring(tokens: &crate::token::TokenSet) -> (Check, Option<Secret>) {
                 name: NAME,
                 status: Status::Pass,
                 kind: Kind::Local,
-                reason: format!("SYNTHETIC tokens stored, read back equal, entry '{}' deleted and confirmed gone; no pre-existing items touched", store::account_name(&r.account_id)),
+                reason: format!("SYNTHETIC tokens stored, read back equal, entry '{}' deleted and confirmed gone; no pre-existing items touched. CAVEAT: proves the keyring round trip only, NOT encryption at rest - the default login keyring on this machine is unencrypted (spike 01 finding)", store::account_name(&r.account_id)),
             },
             r.loaded,
         ),
@@ -243,7 +292,7 @@ fn c_keyring(tokens: &crate::token::TokenSet) -> (Check, Option<Secret>) {
             },
             None,
         ),
-        Err(e) => (unverified(ID, NAME, &format!("UNVERIFIED: store skipped ({e})")), None),
+        Err(e) => (local_unverified(ID, NAME, &format!("UNVERIFIED: store skipped ({e})")), None),
     }
 }
 
@@ -253,7 +302,7 @@ fn c_handoff_clean(stub: &Path, token: &Secret, source: &str) -> Result<String, 
         return Err(format!("handoff not clean: {r:?}"));
     }
     Ok(format!(
-        "token source={source}; child pid {} environ has {TOKEN_ENV}=<token> (value fingerprint matches); absent from /proc/<pid>/cmdline, stdout, stderr and from child HOME/TMPDIR/cwd scan; env keys={:?}; outranking vars (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ...) not forwarded",
+        "token source={source}; child pid {} environ has {TOKEN_ENV}=<token> (value fingerprint matches); absent from /proc/<pid>/cmdline, stdout, stderr and from child HOME/TMPDIR/cwd scan; env keys={:?}; outranking env vars (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ...) not forwarded. NOT COVERED: apiKeyHelper or managed settings (e.g. under /etc/claude-code) can still supply a credential that outranks the env token; the env scrubbing here does not touch them",
         r.child_pid, r.env_keys
     ))
 }
@@ -309,6 +358,7 @@ pub fn collect(stub_exe: &Path) -> Record {
     );
     let header = vec![
         ("OS".into(), format!("{} / kernel {}", os_pretty_name(), kernel)),
+        ("Hardware".into(), format!("CPU: {} | GPU: {}", cpu_model(), gpu_summary())),
         ("Session".into(), session),
         ("rustc".into(), rustc),
         ("node".into(), node.unwrap_or_else(|| "not present".into())),
@@ -359,11 +409,11 @@ pub fn collect(stub_exe: &Path) -> Record {
         name: "OAUTH.md assumption: third-party app runs its own claude.ai OAuth and stores the tokens",
         status: Status::Fail,
         kind: Kind::Finding,
-        reason: "CONTRADICTED by Anthropic docs (code.claude.com/docs/en/legal-and-compliance): third parties may not offer claude.ai login, route via Free/Pro/Max credentials, or 'collect, store, or intermediate Claude.ai credentials or session tokens'".into(),
+        reason: "CONTRADICTED by Anthropic docs. legal-and-compliance: third parties may not offer claude.ai login, route via Free/Pro/Max credentials, or 'collect, store, or intermediate Claude.ai credentials or session tokens'. agent-sdk/overview: 'Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK' (an explicit Anthropic approval is the only documented exception)".into(),
     });
     checks.push(unverified("F02", "live PKCE against claude.ai (endpoints, client_id, scopes)", "not run: needs interactive consent; no client_id is hardcoded/extracted; --live reads A_EYE_OAUTH_* env and is opt-in"));
     checks.push(unverified("F03", "real access-token lifetime", "docs: `claude setup-token` token is one year; /login access-token TTL and refresh behavior are not documented; mock uses synthetic 3600s"));
-    checks.push(unverified("F04", "SDK accepts a subscription OAuth token via env", "docs name CLAUDE_CODE_OAUTH_TOKEN for Claude Code (CLI); SDK runs the same binary, but no SDK-specific statement and nothing was run"));
+    checks.push(unverified("F04", "SDK accepts a subscription OAuth token via env", "docs name CLAUDE_CODE_OAUTH_TOKEN for Claude Code (CLI); SDK runs the same binary, but no SDK-specific statement and nothing was run. Per the authentication docs, --bare mode does NOT read CLAUDE_CODE_OAUTH_TOKEN (needs ANTHROPIC_API_KEY or apiKeyHelper instead)"));
     checks.push(unverified("F05", "real SDK session turn + session-binding (2nd turn references 1st)", "real SDK session: UNVERIFIED (requires interactive consent + user subscription); SDK session_id is a UUID per docs"));
     Record { header, checks }
 }
@@ -379,6 +429,16 @@ pub fn render(rec: &Record) -> String {
         let tag = if c.kind == Kind::Local { "L" } else { "F" };
         s.push_str(&format!("[{:<10}] {} {} {}\n             {}\n", c.status.label(), c.id, tag, c.name, c.reason));
     }
+    let n = |st: Status, k: Kind| rec.checks.iter().filter(|c| c.status == st && c.kind == k).count();
+    s.push_str(&format!(
+        "\nSUMMARY: local checks PASS={} FAIL={} UNVERIFIED={} | findings PASS={} FAIL={} UNVERIFIED={}\n",
+        n(Status::Pass, Kind::Local),
+        n(Status::Fail, Kind::Local),
+        n(Status::Unverified, Kind::Local),
+        n(Status::Pass, Kind::Finding),
+        n(Status::Fail, Kind::Finding),
+        n(Status::Unverified, Kind::Finding),
+    ));
     let proved: Vec<String> = rec
         .checks
         .iter()
@@ -400,7 +460,7 @@ pub fn render(rec: &Record) -> String {
     ] {
         s.push_str(&format!("  {l}\n"));
     }
-    s.push_str("\nNotes: zeroize-on-drop is not implemented (no extra dependency in the spike). Mock server is HTTP on loopback; real endpoints are HTTPS.\n");
+    s.push_str("\nNotes: zeroize-on-drop is not implemented (no extra dependency in the spike). The mock server speaks plain HTTP on loopback only. Cleartext is refused for any non-loopback host (parsed-URL check in endpoint.rs, enforced in the token exchange), and --live additionally requires https for both endpoints; that is a client-side policy, not a statement about what any real provider serves.\n");
     s
 }
 
