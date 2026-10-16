@@ -73,6 +73,43 @@ fn classify(stage: &'static str, e: ashpd::Error) -> PortalError {
     }
 }
 
+/// Map the outcome of an interactive (consent) step. A timeout is `TimedOut`;
+/// a portal response error (including `Cancelled`) goes through [`classify`].
+fn resolve<T>(
+    stage: &'static str,
+    timed: Result<Result<T, ashpd::Error>, tokio::time::error::Elapsed>,
+) -> Result<T, PortalError> {
+    match timed {
+        Err(_) => Err(PortalError::TimedOut),
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(classify(stage, e)),
+    }
+}
+
+/// Something that can end a portal session (seam so the "error => session
+/// closed" rule is unit-testable without a portal).
+trait Closable {
+    async fn close_it(&self) -> Result<(), ashpd::Error>;
+}
+
+impl Closable for Session<Screencast> {
+    async fn close_it(&self) -> Result<(), ashpd::Error> {
+        self.close().await
+    }
+}
+
+/// On `Err`, close the session (dismissing any open dialog) and pass the
+/// error through; on `Ok` leave the session open.
+async fn close_on_error<T, C: Closable>(
+    closer: &C,
+    r: Result<T, PortalError>,
+) -> Result<T, PortalError> {
+    if r.is_err() {
+        let _ = tokio::time::timeout(STEP_TIMEOUT, closer.close_it()).await;
+    }
+    r
+}
+
 /// Facts about the portal interface, recorded as soon as they are known.
 #[derive(Debug, Clone, Default)]
 pub struct PortalFacts {
@@ -113,11 +150,15 @@ pub struct PortalCreated {
     pub facts: PortalFacts,
 }
 
-/// Step 2: sources selected (monitor), consent dialog not yet shown.
+/// Step 2: sources selected (monitor) and the portal's SelectSources
+/// response was OK (not cancelled). Carries the consent deadline that
+/// started before SelectSources: on some backends (xdph) the interactive
+/// picker is shown during SelectSources, on others during Start.
 pub struct PortalSelected {
     proxy: Screencast,
     session: Session<Screencast>,
     pub facts: PortalFacts,
+    deadline: Instant,
 }
 
 /// Step 3: the user consented; `stream` is what they selected.
@@ -172,16 +213,18 @@ pub async fn create() -> Result<PortalCreated, PortalError> {
         interface_version: Some(proxy.version()),
         ..Default::default()
     };
-    facts.available_source_types = proxy
-        .available_source_types()
-        .await
-        .ok()
-        .map(|t| format!("{t:?}"));
-    facts.available_cursor_modes = proxy
-        .available_cursor_modes()
-        .await
-        .ok()
-        .map(|m| format!("{m:?}"));
+    facts.available_source_types =
+        tokio::time::timeout(STEP_TIMEOUT, proxy.available_source_types())
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .map(|t| format!("{t:?}"));
+    facts.available_cursor_modes =
+        tokio::time::timeout(STEP_TIMEOUT, proxy.available_cursor_modes())
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .map(|m| format!("{m:?}"));
     let session = with_timeout("create_session", proxy.create_session(Default::default())).await?;
     Ok(PortalCreated {
         proxy,
@@ -194,7 +237,14 @@ impl PortalCreated {
     /// Request monitor capture (not window). Cursor: hidden when offered
     /// (pointer position is tracked separately by A-Eye; see CAPTURE.md),
     /// else embedded, else the portal default.
-    pub async fn select_monitor(mut self) -> Result<PortalSelected, PortalError> {
+    ///
+    /// The interactive picker may appear during SelectSources (xdph) or
+    /// during Start (others), so the whole consent budget (`budget`, capped at
+    /// [`CONSENT_TIMEOUT`]) starts here and spans both calls. The SelectSources
+    /// *response* is awaited: ashpd returns `Ok(Request)` even when the portal
+    /// answered Cancelled, which only surfaces through `response()`.
+    pub async fn select_monitor(mut self, budget: Duration) -> Result<PortalSelected, PortalError> {
+        let deadline = Instant::now() + budget.min(CONSENT_TIMEOUT);
         let cursor = {
             let offered = self
                 .facts
@@ -220,53 +270,45 @@ impl PortalCreated {
             .set_cursor_mode(cursor)
             .set_persist_mode(PersistMode::DoNot)
             .set_restore_token(None);
-        let r = with_timeout(
-            "select_sources",
-            self.proxy.select_sources(&self.session, opts),
-        )
+        let timed = tokio::time::timeout_at(deadline.into(), async {
+            let request = self.proxy.select_sources(&self.session, opts).await?;
+            request.response()
+        })
         .await;
-        match r {
-            Ok(_) => Ok(PortalSelected {
-                proxy: self.proxy,
-                session: self.session,
-                facts: self.facts,
-            }),
-            Err(e) => {
-                let _ = self.session.close().await;
-                Err(e)
-            }
-        }
+        let r = close_on_error(&self.session, resolve("select_sources", timed)).await;
+        r.map(|()| PortalSelected {
+            proxy: self.proxy,
+            session: self.session,
+            facts: self.facts,
+            deadline,
+        })
     }
 }
 
 impl PortalSelected {
-    /// Show the compositor consent dialog and wait (at most `timeout`, capped
-    /// at [`CONSENT_TIMEOUT`]) for a decision. Always closes the session on
-    /// any non-success path.
-    pub async fn start(self, timeout: Duration) -> Result<StartedSession, PortalError> {
-        let timeout = timeout.min(CONSENT_TIMEOUT);
+    /// Start the session and wait for the remaining consent budget. Always
+    /// closes the session on any non-success path.
+    pub async fn start(self) -> Result<StartedSession, PortalError> {
         let PortalSelected {
             proxy,
             session,
             facts,
+            deadline,
         } = self;
-        let res =
-            tokio::time::timeout(timeout, proxy.start(&session, None, Default::default())).await;
-        let outcome = match res {
-            Err(_) => Err(PortalError::TimedOut),
-            Ok(Err(e)) => Err(classify("start (consent)", e)),
-            Ok(Ok(request)) => match request.response() {
-                Err(e) => Err(classify("start (consent)", e)),
-                Ok(streams) => match streams.streams().first() {
-                    None => Err(PortalError::Failed {
-                        stage: "start (consent)",
-                        message: "portal returned no streams".to_string(),
-                    }),
-                    Some(s) => Ok((StreamInfo::from_stream(s), streams.streams().len())),
-                },
-            },
-        };
-        match outcome {
+        let timed = tokio::time::timeout_at(deadline.into(), async {
+            let request = proxy.start(&session, None, Default::default()).await?;
+            request.response()
+        })
+        .await;
+        let outcome =
+            resolve("start (consent)", timed).and_then(|streams| match streams.streams().first() {
+                None => Err(PortalError::Failed {
+                    stage: "start (consent)",
+                    message: "portal returned no streams".to_string(),
+                }),
+                Some(s) => Ok((StreamInfo::from_stream(s), streams.streams().len())),
+            });
+        match close_on_error(&session, outcome).await {
             Ok((stream, stream_count)) => Ok(StartedSession {
                 proxy,
                 session,
@@ -275,11 +317,7 @@ impl PortalSelected {
                 confirmed_at: Instant::now(),
                 stream_count,
             }),
-            Err(e) => {
-                // Dismisses a still-open dialog and releases the session.
-                let _ = tokio::time::timeout(STEP_TIMEOUT, session.close()).await;
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 }
@@ -338,6 +376,63 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    struct FakeSession(std::cell::Cell<u32>);
+    impl Closable for FakeSession {
+        async fn close_it(&self) -> Result<(), ashpd::Error> {
+            self.0.set(self.0.get() + 1);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resolve_maps_portal_cancel_to_denied() {
+        // B1: ashpd returns Ok(Request) and the error only appears in response().
+        let r: Result<(), PortalError> = resolve(
+            "select_sources",
+            Ok(Err(ashpd::Error::Response(ResponseError::Cancelled))),
+        );
+        assert!(matches!(r, Err(PortalError::Denied)));
+        let other: Result<(), PortalError> = resolve(
+            "select_sources",
+            Ok(Err(ashpd::Error::Response(ResponseError::Other))),
+        );
+        assert!(matches!(other, Err(PortalError::Failed { .. })));
+        assert!(resolve("select_sources", Ok(Ok(7))).is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_maps_elapsed_to_timed_out() {
+        let timed = tokio::time::timeout(
+            Duration::from_millis(1),
+            std::future::pending::<Result<(), ashpd::Error>>(),
+        )
+        .await;
+        assert!(matches!(
+            resolve("select_sources", timed),
+            Err(PortalError::TimedOut)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn response_error_closes_session_and_yields_no_success() {
+        let denied = FakeSession(Default::default());
+        let r: Result<(), PortalError> = close_on_error(
+            &denied,
+            resolve(
+                "select_sources",
+                Ok(Err(ashpd::Error::Response(ResponseError::Cancelled))),
+            ),
+        )
+        .await;
+        assert!(matches!(r, Err(PortalError::Denied)));
+        assert_eq!(denied.0.get(), 1, "session must be closed on denial");
+
+        let ok = FakeSession(Default::default());
+        let r = close_on_error(&ok, resolve("start", Ok(Ok(1)))).await;
+        assert_eq!(r.unwrap(), 1);
+        assert_eq!(ok.0.get(), 0, "session must stay open on success");
     }
 
     #[test]

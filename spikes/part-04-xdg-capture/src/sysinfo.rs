@@ -164,13 +164,8 @@ pub fn portal_info(current_desktop: &str) -> PortalInfo {
     }
     backends.sort_by(|a, b| a.file.cmp(&b.file));
 
-    let running_portal_processes = run("ps", &["-eo", "comm"])
-        .map(|s| {
-            s.lines()
-                .filter(|l| l.starts_with("xdg-desktop-por"))
-                .map(|l| l.to_string())
-                .collect()
-        })
+    let running_portal_processes = run("ps", &["-eo", "args="])
+        .map(|s| portal_process_names(&s))
         .unwrap_or_default();
 
     let desktops: Vec<String> = current_desktop
@@ -199,6 +194,21 @@ pub fn portal_info(current_desktop: &str) -> PortalInfo {
         running_portal_processes,
         screencast_backend_for_desktop,
     }
+}
+
+/// Full executable names of running `xdg-desktop-portal*` processes, from
+/// `ps -eo args=` output (comm is truncated to 15 chars, args is not).
+pub fn portal_process_names(ps_args_output: &str) -> Vec<String> {
+    let mut names: Vec<String> = ps_args_output
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter_map(|exe| exe.rsplit('/').next())
+        .filter(|n| n.starts_with("xdg-desktop-portal"))
+        .map(|n| n.to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +290,15 @@ mod tests {
         assert_eq!(locked_version("pipewire"), "0.10.1");
         assert_eq!(locked_version("png"), "0.18.1");
         assert_eq!(locked_version("definitely-not-a-crate"), "unknown");
+    }
+
+    #[test]
+    fn portal_process_names_are_not_truncated() {
+        let ps = "/usr/lib/xdg-desktop-portal\n/usr/lib/xdg-desktop-portal-gtk --verbose\nbash\n/usr/bin/foo-xdg-desktop-portal\n";
+        assert_eq!(
+            portal_process_names(ps),
+            vec!["xdg-desktop-portal", "xdg-desktop-portal-gtk"]
+        );
     }
 
     #[test]
