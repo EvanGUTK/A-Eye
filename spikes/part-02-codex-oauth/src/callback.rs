@@ -20,7 +20,10 @@ pub const DEFAULT_PATH: &str = "/callback";
 /// docs/architecture/OAUTH.md: listen for at most 5 minutes.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
+/// Total time one connection may take to deliver its request head.
 const PER_CONNECTION_READ: Duration = Duration::from_secs(2);
+/// Socket timeouts must be non-zero; this is the floor.
+const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 pub enum CallbackError {
@@ -111,16 +114,21 @@ impl CallbackServer {
         expected_state: &str,
         deadline: Instant,
     ) -> Option<Result<Secret, CallbackError>> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let read_budget = PER_CONNECTION_READ.min(remaining).max(Duration::from_millis(50));
-        if stream.set_nonblocking(false).is_err()
-            || stream.set_read_timeout(Some(read_budget)).is_err()
-            || stream.set_write_timeout(Some(PER_CONNECTION_READ)).is_err()
-        {
+        // Absolute per-connection deadline: a trickling client gets PER_CONNECTION
+        // total time (never more than the overall deadline), not PER_CONNECTION per read.
+        let conn_deadline = (Instant::now() + PER_CONNECTION_READ).min(deadline);
+        let write_budget = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(1))
+            .max(MIN_SOCKET_TIMEOUT);
+        if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(write_budget)).is_err() {
             return None;
         }
-        let Some(head) = read_head(&mut stream) else {
-            respond(&mut stream, 400, "Bad Request");
+        let Some(head) = read_head(&mut stream, conn_deadline) else {
+            // Out of time: just drop the connection and go back to listening.
+            if Instant::now() < conn_deadline {
+                respond(&mut stream, 400, "Bad Request");
+            }
             return None;
         };
         let Some(req) = parse_head(&head) else {
@@ -190,12 +198,19 @@ struct RequestHead {
     host: Option<String>,
 }
 
-/// Read until the blank line ending the headers (bounded). `None` on timeout,
-/// EOF before a full head, or oversize.
-fn read_head(stream: &mut TcpStream) -> Option<String> {
+/// Read until the blank line ending the headers (bounded in size AND time).
+/// The socket read timeout is reset to the time remaining before every read, so
+/// the whole head must arrive by `deadline`. `None` on timeout, EOF before a
+/// full head, or oversize.
+fn read_head(stream: &mut TcpStream, deadline: Instant) -> Option<String> {
     let mut buf = Vec::with_capacity(512);
     let mut chunk = [0u8; 512];
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        stream.set_read_timeout(Some(remaining.max(MIN_SOCKET_TIMEOUT))).ok()?;
         match stream.read(&mut chunk) {
             Ok(0) => return None,
             Ok(n) => {
@@ -407,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn slow_client_cannot_block_past_deadline() {
+    fn idle_client_cannot_block_past_deadline() {
         let server = CallbackServer::bind(0).unwrap();
         let addr = server.local_addr();
         // Connect and send nothing; the wait must still honour its deadline.
@@ -416,6 +431,62 @@ mod tests {
         let r = server.wait("s", Duration::from_millis(500));
         assert!(matches!(r, Err(CallbackError::Timeout(_))));
         assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
+    }
+
+    /// Trickle `payload` one byte per `gap`, for at most `max`, from a thread.
+    fn trickle(addr: SocketAddr, payload: String, gap: Duration, max: Duration) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            let end = Instant::now() + max;
+            for b in payload.bytes().cycle() {
+                if Instant::now() >= end || s.write_all(&[b]).is_err() {
+                    break;
+                }
+                thread::sleep(gap);
+            }
+        })
+    }
+
+    /// Regression (validator B1): the read timeout used to be per read(), so a
+    /// client sending one byte every few hundred ms kept `wait` open far past
+    /// its deadline.
+    #[test]
+    fn trickling_client_cannot_block_past_deadline() {
+        let server = CallbackServer::bind(0).unwrap();
+        let addr = server.local_addr();
+        let t = trickle(
+            addr,
+            format!("GET /callback?x=y HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Pad: ", addr.port()),
+            Duration::from_millis(150),
+            Duration::from_secs(8),
+        );
+        let deadline = Duration::from_secs(1);
+        let started = Instant::now();
+        let r = server.wait("s", deadline);
+        let took = started.elapsed();
+        assert!(matches!(r, Err(CallbackError::Timeout(_))), "{r:?}");
+        assert!(took < deadline + Duration::from_millis(700), "wait overran its deadline: {took:?}");
+        t.join().unwrap();
+    }
+
+    /// A trickler that connected first must not starve the real callback:
+    /// it is dropped at the per-connection limit and the callback is served.
+    #[test]
+    fn trickler_does_not_starve_real_callback() {
+        let server = CallbackServer::bind(0).unwrap();
+        let addr = server.local_addr();
+        let t = trickle(
+            addr,
+            format!("GET /callback?x=y HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Pad: ", addr.port()),
+            Duration::from_millis(150),
+            Duration::from_secs(8),
+        );
+        let h = spawn_wait(server, "s", Duration::from_secs(6));
+        thread::sleep(Duration::from_millis(300)); // trickler is accepted first
+        let ok = get(addr, "/callback?code=real&state=s");
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+        assert_eq!(h.join().unwrap().unwrap().expose(), "real");
+        t.join().unwrap();
     }
 
     #[test]
