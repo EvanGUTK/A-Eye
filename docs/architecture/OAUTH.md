@@ -39,6 +39,7 @@ fallback and is the only path for providers that have no OAuth (Grok, Ollama).
        &redirect_uri=http://127.0.0.1:<port><callback-path>
        &code_challenge=<challenge>
        &code_challenge_method=S256
+       &state=<random state, checked on the callback>
        &scope=<scopes>
 5. User approves in their browser (their normal session, their 2FA)
 6. Browser redirects to the local callback with ?code=<auth_code>
@@ -89,13 +90,21 @@ product is Anthropic's Claude Code or imply unlimited subscription use.
 Policy finding from spike 03 (recorded as F01 in its capability record, read 2026-10-15
 at code.claude.com/docs/en/legal-and-compliance and `/agent-sdk/overview`): Anthropic
 states that third-party developers may not offer claude.ai login in their own
-applications or route requests through Free, Pro or Max plan credentials, and may not
-"collect, store, or intermediate Claude.ai credentials or session tokens"; the Agent SDK
-overview adds "Unless previously approved". The documented permitted path is an end user
-signing in to the unmodified Claude Code binary with their own subscription. The project
-decision is to keep A-Eye-owned OAuth for Claude (see `DECISIONS.md`); this risk is
-accepted by the project owner and is not resolved by the spike. Live use should wait for
-Anthropic's approval or a switch to the permitted path.
+applications or "route requests through Free, Pro, or Max plan credentials on behalf of
+their users", and that developers "may not collect, store, or intermediate Claude.ai
+credentials or session tokens"; the Agent SDK overview adds "Unless previously approved".
+The documented permitted path is an end user signing in to the unmodified Claude Code
+binary with their own subscription. The project decision is to keep A-Eye-owned OAuth
+for Claude ([ADR 014](../decisions/README.md)); this risk is accepted by the project
+owner and is not resolved by the spike. Live use should wait for Anthropic's approval or
+a switch to the permitted path.
+
+Open decision: [AGENT-INTEGRATIONS.md](AGENT-INTEGRATIONS.md) currently says embedded
+Claude uses supported API authentication unless the publisher has explicit approval for
+another route, which conflicts with ADR 014 until that approval exists or one of the two
+documents is revised. No release gate is defined yet; the spike's `A_EYE_LIVE_ACK_POLICY=1`
+is an operator acknowledgement, not Anthropic approval. Whether to require written
+approval before shipping Claude OAuth is for the project owner to decide.
 
 ### Codex (ChatGPT subscription)
 
@@ -104,17 +113,17 @@ Anthropic's approval or a switch to the permitted path.
 | Issuer | `https://auth.openai.com` (**Verified from source**) |
 | Auth endpoint | `https://auth.openai.com/oauth/authorize` (**Verified from source**; the earlier `/authorize` path was wrong) |
 | Token endpoint | `https://auth.openai.com/oauth/token` (**Verified from source**; the earlier `/token` path was wrong) |
-| Redirect URI | Fixed: `http://127.0.0.1:1455/auth/callback`, fallback port `1457` (**Verified from source**). The CLI source comments say these are kept in sync with an allow-list of registered redirect URIs, so a random port with `/callback` will most likely be rejected by the Codex public client (inference, **Unverified** live) |
+| Redirect URI | Fixed: `http://127.0.0.1:1455/auth/callback`, fallback port `1457` (**Verified from source**). A source comment on the fallback port says to keep it in sync with the Codex CLI Hydra redirect URI allow-list, so a random port with `/callback` will most likely be rejected by the Codex public client (inference, **Unverified** live) |
 | Client ID | Same client_id used by the Codex CLI (public) (**Unverified**; spike 02 does not hardcode or extract one, and whether another application may use it is an open policy question) |
 | Scopes | `openid profile email offline_access api.connectors.read api.connectors.invoke` (**Verified from source**) |
 | Extra authorize parameters | `id_token_add_organizations=true`, `codex_cli_simplified_flow=true`, `originator=<client name>` (**Verified from source**) |
-| PKCE | S256; the CLI generates a 64-byte verifier (the 32 bytes in the generic flow above are also valid per RFC 7636) (**Verified from source**) |
+| PKCE | S256; the CLI generates a verifier from 64 random bytes (the 32 random bytes in the generic flow above are also valid per RFC 7636) (**Verified from source**) |
 | Token exchange | Authorization-code grant is form-encoded (`application/x-www-form-urlencoded`); ChatGPT token refresh uses JSON (**Verified from source**) |
-| Token storage | Per the Codex docs the CLI caches credentials in `~/.codex/auth.json` or the OS credential store, selected by `cli_auth_credentials_store` (`file`, `keyring`, `auto`, `ephemeral`). A-Eye stores its own tokens in the OS credential store (see below); sharing `auth.json` is **Unverified** |
+| Token storage | Per the Codex docs (developers.openai.com/codex/auth) the CLI caches credentials in `~/.codex/auth.json` or the OS credential store, selected by `cli_auth_credentials_store` (`file`, `keyring`, `auto`, `ephemeral`). A-Eye stores its own tokens in the OS credential store (see below); sharing `auth.json` is **Unverified** |
 | Token lifetime | **Unverified** (spike 02 used synthetic values) |
 | App-server | Codex daemon started by A-Eye using stored tokens; connects via Unix socket (**Unverified**; no app-server turn was run) |
 
-The Codex app-server (`codex --app-server`) handles its own auth internally
+The Codex app-server (`codex app-server` in the CLI source; the `--app-server` spelling and the socket path below are **Unverified**) handles its own auth internally
 when tokens are present. A-Eye can either:
 
 - **Reuse the Codex CLI daemon** if already running (preferred; no duplicate process)
@@ -161,7 +170,7 @@ Credential key format:
 Stored attributes:
   access_token
   refresh_token
-  expires_at (ISO 8601)
+  expires_at (ISO 8601; spikes 02 and 03 store unix seconds, to be reconciled)
   account_email (display only)
 ```
 
