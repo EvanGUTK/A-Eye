@@ -170,7 +170,8 @@ Credential key format:
 Stored attributes:
   access_token
   refresh_token
-  expires_at (ISO 8601; spikes 02 and 03 store unix seconds, to be reconciled)
+  expires_at (ISO 8601; spike 02 stores RFC 3339 `expires_at`, spike 03 stores unix seconds as
+  `expires_at_unix`; to be reconciled)
   account_email (display only)
 ```
 
