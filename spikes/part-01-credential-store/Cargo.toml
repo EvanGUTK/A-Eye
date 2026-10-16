@@ -1,0 +1,13 @@
+[package]
+name = "spike-01-credential-store"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "A-Eye spike part 01: credential store (Secret Service via keyring + AES-256-GCM encrypted-file fallback)"
+
+# Standalone spike: never join a parent workspace.
+[workspace]
+
+[dependencies]
+keyring = "=4.2.0"
