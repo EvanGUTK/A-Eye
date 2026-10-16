@@ -96,6 +96,22 @@ mod tests {
     }
 
     #[test]
+    fn alternative_loopback_spellings_normalize_to_canonical_form() {
+        // What the HTTP client is given must be the normalized URL the policy judged.
+        for raw in [
+            "http://127.1:5/token",
+            "http://0x7f.1:5/token",
+            "http://2130706433:5/token",
+            "http://127.0.0.1.:5/token",
+            "http://0177.0.0.1:5/token",
+        ] {
+            let u = require_secure_or_loopback(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+            assert!(is_loopback_url(&u), "{raw}");
+            assert_eq!(u.as_str(), "http://127.0.0.1:5/token", "{raw} not normalized");
+        }
+    }
+
+    #[test]
     fn cleartext_allowed_only_for_real_loopback() {
         assert!(require_secure_or_loopback("http://127.0.0.1:5/token").is_ok());
         assert!(require_secure_or_loopback("https://auth.example.com/token").is_ok());

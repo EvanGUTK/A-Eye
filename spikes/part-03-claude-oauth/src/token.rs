@@ -63,6 +63,10 @@ pub fn exchange_code(
     let is_loopback = crate::endpoint::is_loopback_url(&parsed);
     let mut cfg = ureq::Agent::config_builder()
         .http_status_as_error(false)
+        // Never follow redirects: a redirect would bypass the https/loopback
+        // policy checked above (and could hand tokens to another host).
+        .max_redirects(0)
+        .max_redirects_will_error(false)
         .timeout_global(Some(timeout));
     if is_loopback {
         // Never route loopback mock traffic through an env proxy.
@@ -70,7 +74,8 @@ pub fn exchange_code(
     }
     let agent: ureq::Agent = cfg.build().into();
     let mut resp = agent
-        .post(token_url)
+        // The normalized URL that the policy judged, not the raw spelling.
+        .post(parsed.as_str())
         .send_form([
             ("grant_type", "authorization_code"),
             ("code", code.expose()),
@@ -80,6 +85,9 @@ pub fn exchange_code(
         ])
         .map_err(|e| FlowError::Io(format!("token request failed: {e}")))?;
     let status = resp.status().as_u16();
+    if (300..400).contains(&status) {
+        return Err(FlowError::TokenEndpoint(format!("redirect_{status}_refused")));
+    }
     let body = resp
         .body_mut()
         .read_to_string()

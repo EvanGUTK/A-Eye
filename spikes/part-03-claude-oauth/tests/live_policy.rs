@@ -76,3 +76,17 @@ fn token_exchange_refuses_cleartext_to_lookalike_hosts() {
         );
     }
 }
+
+#[test]
+fn exchange_uses_normalized_url_for_alternative_loopback_spellings() {
+    use spike_03_claude_oauth::mock::{Behavior, MockProvider};
+    // Mock answers invalid_grant to any well-formed form POST: reaching it proves
+    // the request went to the normalized loopback address.
+    let mock = MockProvider::start(Behavior::TokenInvalidGrant).unwrap();
+    let port = mock.base.rsplit(':').next().unwrap().to_string();
+    for host in ["127.1", "0x7f.1", "2130706433", "127.0.0.1."] {
+        let url = format!("http://{host}:{port}/token");
+        let r = exchange_code(&url, "mock-client-id", &Secret::new("c"), &Secret::new("v"), "http://127.0.0.1:1/callback", Duration::from_secs(3));
+        assert_eq!(r.unwrap_err(), FlowError::TokenEndpoint("invalid_grant".into()), "{url}");
+    }
+}
