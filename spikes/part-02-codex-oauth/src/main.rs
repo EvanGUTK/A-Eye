@@ -1,8 +1,10 @@
 //! A-Eye spike part 02: Codex-style OAuth 2.0 + PKCE flow (mock provider only).
 
 mod callback;
+mod mock;
 mod pkce;
 mod secret;
+mod token;
 
 fn main() {
     let p = pkce::generate();

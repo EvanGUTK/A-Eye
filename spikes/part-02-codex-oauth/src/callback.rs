@@ -66,6 +66,13 @@ impl CallbackServer {
         Ok(CallbackServer { listener, addr, path: DEFAULT_PATH.to_string() })
     }
 
+    /// Override the callback path (default `/callback`). A provider that only
+    /// allows a registered redirect URI (Codex CLI uses `/auth/callback`) needs this.
+    pub fn with_path(mut self, path: &str) -> Self {
+        self.path = path.to_string();
+        self
+    }
+
     pub fn local_addr(&self) -> SocketAddr {
         self.addr
     }
