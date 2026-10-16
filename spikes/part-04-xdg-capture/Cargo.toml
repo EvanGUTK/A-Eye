@@ -3,6 +3,7 @@ name = "spike-04-xdg-capture"
 version = "0.1.0"
 edition = "2021"
 publish = false
+default-run = "spike-04-xdg-capture"
 description = "A-Eye spike 04: XDG ScreenCast portal -> PipeWire frame -> PNG"
 
 # Standalone spike: not part of any workspace.

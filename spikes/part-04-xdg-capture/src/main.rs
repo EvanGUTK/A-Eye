@@ -5,6 +5,7 @@
 use std::time::Instant;
 
 use spike_04_xdg_capture::portal::{self, PortalError, StartedSession, CONSENT_TIMEOUT};
+use spike_04_xdg_capture::pw;
 use spike_04_xdg_capture::record::{Record, Status};
 use spike_04_xdg_capture::sysinfo;
 
@@ -275,7 +276,11 @@ async fn portal_stage(rec: &mut Record) -> Option<StartedSession> {
     }
 }
 
-fn record_stream(rec: &mut Record, s: &StartedSession, mons: &Option<Vec<sysinfo::Monitor>>) {
+fn record_stream(
+    rec: &mut Record,
+    s: &StartedSession,
+    mons: &Option<Vec<sysinfo::Monitor>>,
+) -> Option<sysinfo::Monitor> {
     let st = &s.stream;
     rec.row("selected stream", "PipeWire node id", st.node_id.to_string());
     rec.row(
@@ -329,7 +334,8 @@ fn record_stream(rec: &mut Record, s: &StartedSession, mons: &Option<Vec<sysinfo
         }),
         _ => None,
     };
-    match matched {
+    let matched = matched.cloned();
+    match &matched {
         Some(m) => {
             rec.row(
                 "selected stream",
@@ -353,6 +359,112 @@ fn record_stream(rec: &mut Record, s: &StartedSession, mons: &Option<Vec<sysinfo
             "portal gives no scale and the stream could not be matched to a compositor monitor",
         ),
     }
+    matched
+}
+
+fn unverified_capture_checks(rec: &mut Record, why: &str) {
+    rec.check("F1", "PipeWire stream connected + format negotiated", Status::Unverified, why.to_string());
+    rec.check("F2", "first real frame within 10s", Status::Unverified, why.to_string());
+    rec.check("F3", "buffer type identified (SHM, not DMA-BUF)", Status::Unverified, why.to_string());
+    rec.check("F4", "frame dimensions match portal monitor", Status::Unverified, why.to_string());
+}
+
+/// #14: consume exactly one frame from the node the user selected.
+async fn capture_stage(
+    rec: &mut Record,
+    started: &StartedSession,
+    matched: &Option<sysinfo::Monitor>,
+) -> Option<pw::Captured> {
+    let target = match started.open_pipe_wire_remote().await {
+        Ok(t) => t,
+        Err(e) => {
+            unverified_capture_checks(rec, &format!("open_pipe_wire_remote failed: {e}"));
+            rec.unknown(format!("portal: {e}"));
+            return None;
+        }
+    };
+    let joined = tokio::task::spawn_blocking(move || {
+        pw::capture_one_frame(target, pw::FIRST_FRAME_TIMEOUT)
+    })
+    .await;
+    let result = match joined {
+        Ok(r) => r,
+        Err(e) => {
+            unverified_capture_checks(rec, &format!("capture thread failed: {e}"));
+            return None;
+        }
+    };
+    match result {
+        Err(e) => {
+            let negotiated = matches!(&e, pw::CaptureError::Timeout { negotiated: Some(_), .. }
+                | pw::CaptureError::UnsupportedBuffer(_)
+                | pw::CaptureError::BadFrame(_));
+            rec.check(
+                "F1",
+                "PipeWire stream connected + format negotiated",
+                if negotiated { Status::Pass } else { Status::Fail },
+                e.to_string(),
+            );
+            rec.check("F2", "first real frame within 10s", Status::Fail, e.to_string());
+            rec.check("F3", "buffer type identified (SHM, not DMA-BUF)", Status::Unverified, "no frame received");
+            rec.check("F4", "frame dimensions match portal monitor", Status::Unverified, "no frame received");
+            rec.unknown(format!("pipewire: {e}"));
+            None
+        }
+        Ok(c) => {
+            let m = &c.meta;
+            let sec = "first frame";
+            rec.row(sec, "negotiated format", m.negotiated_format.clone());
+            rec.row(sec, "dimensions", format!("{}x{}", m.width, m.height));
+            rec.row(sec, "stride (bytes)", m.stride.to_string());
+            rec.row(sec, "bytes in chunk", format!("{} (offset {})", m.chunk_size, m.chunk_offset));
+            rec.row(sec, "buffer type", m.buffer_type.clone());
+            rec.row(sec, "framerate", format!("{}/{}", m.framerate.0, m.framerate.1));
+            rec.row(sec, "dmabuf modifier", m.modifier.to_string());
+            rec.row(sec, "timestamp (pts ns)", m.pts_ns.map(|p| p.to_string()).unwrap_or_else(|| "not provided by producer".into()));
+            rec.row(sec, "sequence", m.seq.map(|p| p.to_string()).unwrap_or_else(|| "not provided".into()));
+            rec.row(sec, "empty buffers skipped first", m.skipped_buffers.to_string());
+            rec.row(sec, "stream connect -> first frame", format!("{:.1} ms", m.connect_to_frame.as_secs_f64() * 1e3));
+            rec.row(sec, "portal confirm -> first frame", m.confirm_to_frame.map(|d| format!("{:.1} ms", d.as_secs_f64() * 1e3)).unwrap_or_else(|| "n/a".into()));
+
+            rec.check("F1", "PipeWire stream connected + format negotiated", Status::Pass,
+                format!("{} {}x{}", m.negotiated_format, m.width, m.height));
+            rec.check("F2", "first real frame within 10s", Status::Pass,
+                format!("{:.0} ms after connect", m.connect_to_frame.as_secs_f64() * 1e3));
+            let shm = m.buffer_type.contains("MemFd") || m.buffer_type.contains("MemPtr");
+            rec.check("F3", "buffer type identified (SHM, not DMA-BUF)",
+                if shm { Status::Pass } else { Status::Fail },
+                format!("{} (CPU-mapped; DMA-BUF was not requested)", m.buffer_type));
+
+            // F4: compare with the portal-reported size, accounting for scale.
+            let portal_logical = started.stream.logical_size;
+            let (status, why) = match (matched, portal_logical) {
+                (Some(mon), _) if (m.width as i64, m.height as i64) == (mon.width, mon.height) => (
+                    Status::Pass,
+                    format!("frame {}x{} == physical size of {} (logical {:?} x scale {})", m.width, m.height, mon.name, portal_logical, mon.scale),
+                ),
+                (Some(mon), _) => (
+                    Status::Fail,
+                    format!("frame {}x{} != {}x{} physical size of {}", m.width, m.height, mon.width, mon.height, mon.name),
+                ),
+                (None, Some((w, h))) if (m.width as i64, m.height as i64) == (w as i64, h as i64) => (
+                    Status::Pass,
+                    format!("frame equals portal size {w}x{h} (monitor scale not determined)"),
+                ),
+                (None, Some((w, h))) => (
+                    Status::Unverified,
+                    format!("frame {}x{} differs from portal logical {w}x{h}; scale unknown so cannot confirm", m.width, m.height),
+                ),
+                (None, None) => (Status::Unverified, "portal reported no size".to_string()),
+            };
+            rec.check("F4", "frame dimensions match portal monitor", status, why);
+            rec.proved(format!(
+                "received 1 real frame via portal stream node {}: {} {}x{} stride {} in {} buffer",
+                started.stream.node_id, m.negotiated_format, m.width, m.height, m.stride, m.buffer_type
+            ));
+            Some(c)
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -364,13 +476,14 @@ async fn main() {
     let mons = record_monitors(&mut rec);
 
     if let Some(started) = portal_stage(&mut rec).await {
-        record_stream(&mut rec, &started, &mons);
+        let matched = record_stream(&mut rec, &started, &mons);
         rec.check(
             "P5",
             "no capture before started session",
             Status::Pass,
             "compile-time: CaptureTarget is only built from a StartedSession (see portal.rs)",
         );
+        let _captured = capture_stage(&mut rec, &started, &matched).await;
         match started.close().await {
             Ok(()) => rec.check(
                 "S1",
@@ -393,6 +506,7 @@ async fn main() {
             Status::Unverified,
             "no started session to close",
         );
+        unverified_capture_checks(&mut rec, "no started portal session, so no stream to consume");
     }
     rec.check(
         "M2",
