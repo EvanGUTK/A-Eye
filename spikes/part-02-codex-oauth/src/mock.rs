@@ -241,7 +241,7 @@ fn authorize(stream: &mut TcpStream, req: &Req, client_id: &str, state: &Mutex<S
         }
     }
     state.lock().unwrap().events.push(format!(
-        "authorize ok ({mode:?}): S256 challenge recorded, redirect_uri port {}",
+        "authorize 302 ({mode:?}): S256 challenge recorded, redirect_uri port {}",
         target.port().unwrap_or(0)
     ));
     let loc = format!("Location: {target}\r\n");
