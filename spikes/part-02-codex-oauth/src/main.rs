@@ -6,6 +6,9 @@
 //! human to open, using endpoints/client id from the environment.
 //!
 //! No real provider is contacted in the default run (AGENTS.md rule 12).
+//!
+//! Exit status of the default run: 0 when the record was produced and no row is
+//! FAIL (UNVERIFIED rows do not change it); 2 when at least one row is FAIL.
 
 mod callback;
 mod flow;
@@ -255,6 +258,7 @@ fn finish(mut checks: Vec<Check>, mock: Option<&MockProvider>) -> ExitCode {
 
     println!("=== A-Eye spike part 02: Codex OAuth 2.0 + PKCE capability record ===");
     println!("mode            : MOCK provider only (no real provider call was made)");
+    println!("exit status     : 0 = record produced and no FAIL row (UNVERIFIED does not change it); 2 = at least one FAIL row");
     println!("os              : {} (kernel {})", record::os_pretty_name(), record::kernel());
     println!("session         : {}", record::session_summary());
     println!("rustc           : {rustc}");
@@ -299,7 +303,8 @@ fn finish(mut checks: Vec<Check>, mock: Option<&MockProvider>) -> ExitCode {
     println!("      extra authorize params: id_token_add_organizations=true, codex_cli_simplified_flow=true, originator");
     println!("      auth-code exchange = form-encoded; ChatGPT refresh = JSON; Codex PKCE verifier = 64 random bytes (86 chars)");
     println!("      Codex tolerates a state suffix appended by ChatGPT (life-sciences onboarding); this spike requires exact state");
-    println!("    These differ from docs/architecture/OAUTH.md (endpoint paths, fixed port + /auth/callback, scopes, 32-byte verifier).");
+    println!("    docs/architecture/OAUTH.md differs from the Codex source on endpoint paths (/oauth/authorize, /oauth/token), the fixed");
+    println!("    redirect 127.0.0.1:1455/auth/callback, concrete scopes and the 64-byte verifier; OAUTH.md was NOT updated by this spike.");
     println!("  - Third-party use of the Codex public client_id by another app: no OpenAI statement found; UNVERIFIED");
     println!("  - Codex app-server turn (text + image): out of scope, UNVERIFIED");
     println!("  - Encrypted-file fallback when Secret Service is absent: not implemented in this spike");
@@ -311,9 +316,14 @@ fn finish(mut checks: Vec<Check>, mock: Option<&MockProvider>) -> ExitCode {
     );
     println!("summary: {p} PASS, {f} FAIL, {u} UNVERIFIED");
     if f > 0 {
-        println!("WARNING: {f} check(s) FAILED - the record above is honest, do not treat this spike as green");
+        println!("WARNING: {f} check(s) FAILED - the record above is honest, do not treat this spike as green; exit status 2");
     }
-    ExitCode::SUCCESS
+    ExitCode::from(exit_status(f))
+}
+
+/// 0 when no check FAILed (UNVERIFIED is not a failure), 2 otherwise.
+fn exit_status(failed: usize) -> u8 {
+    if failed == 0 { 0 } else { 2 }
 }
 
 fn run_live() -> ExitCode {
@@ -325,9 +335,8 @@ fn run_live() -> ExitCode {
         return ExitCode::from(2);
     };
     for (name, u) in [("A_EYE_OAUTH_AUTH_URL", &auth_url), ("A_EYE_OAUTH_TOKEN_URL", &token_url)] {
-        let loopback = u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost");
-        if !u.starts_with("https://") && !loopback {
-            eprintln!("{name} must be https:// (or a loopback http:// URL)");
+        if let Err(e) = flow::validate_endpoint(u) {
+            eprintln!("{name} rejected: {e}");
             return ExitCode::from(2);
         }
     }
@@ -366,5 +375,17 @@ fn run_live() -> ExitCode {
             eprintln!("live flow failed: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exit_status;
+
+    #[test]
+    fn exit_status_is_nonzero_only_for_fail_rows() {
+        assert_eq!(exit_status(0), 0);
+        assert_eq!(exit_status(1), 2);
+        assert_eq!(exit_status(7), 2);
     }
 }
