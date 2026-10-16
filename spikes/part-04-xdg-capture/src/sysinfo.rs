@@ -251,6 +251,29 @@ pub fn monitors() -> Option<Vec<Monitor>> {
     Some(out)
 }
 
+pub const SYNTHETIC_NODE_NAME: &str = "aeye-spike04-synthetic";
+pub const SYNTHETIC_MEDIA_CLASS: &str = "Video/Source";
+
+/// True only if `pw_dump_json` (output of `pw-dump <id>`) contains a Node
+/// object whose `info.props` has `node.name` and `media.class` exactly equal
+/// to the synthetic test node's. Anything else (parse failure, other nodes,
+/// substring matches in unrelated fields) is false.
+pub fn is_synthetic_node_dump(pw_dump_json: &str, node_id: u32) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(pw_dump_json) else {
+        return false;
+    };
+    let Some(objs) = v.as_array() else {
+        return false;
+    };
+    objs.iter().any(|o| {
+        let props = &o["info"]["props"];
+        o["id"].as_u64() == Some(node_id as u64)
+            && o["type"].as_str() == Some("PipeWire:Interface:Node")
+            && props["node.name"].as_str() == Some(SYNTHETIC_NODE_NAME)
+            && props["media.class"].as_str() == Some(SYNTHETIC_MEDIA_CLASS)
+    })
+}
+
 /// (runtime libpipewire version, build-time libpipewire version).
 pub fn pipewire_versions() -> (String, String) {
     pipewire::init();
@@ -290,6 +313,27 @@ mod tests {
         assert_eq!(locked_version("pipewire"), "0.10.1");
         assert_eq!(locked_version("png"), "0.18.1");
         assert_eq!(locked_version("definitely-not-a-crate"), "unknown");
+    }
+
+    #[test]
+    fn synthetic_gate_matches_exact_node_properties_only() {
+        let good = r#"[{"id":98,"type":"PipeWire:Interface:Node","info":{"props":{
+            "node.name":"aeye-spike04-synthetic","media.class":"Video/Source"}}}]"#;
+        assert!(is_synthetic_node_dump(good, 98));
+        assert!(!is_synthetic_node_dump(good, 99), "id must match");
+        // name only appears in an unrelated field: substring matching would pass
+        let sneaky = r#"[{"id":5,"type":"PipeWire:Interface:Node","info":{"props":{
+            "node.name":"screen","media.class":"Video/Source",
+            "node.description":"aeye-spike04-synthetic"}}}]"#;
+        assert!(!is_synthetic_node_dump(sneaky, 5));
+        let wrong_class = r#"[{"id":5,"type":"PipeWire:Interface:Node","info":{"props":{
+            "node.name":"aeye-spike04-synthetic","media.class":"Stream/Output/Video"}}}]"#;
+        assert!(!is_synthetic_node_dump(wrong_class, 5));
+        let not_node = r#"[{"id":5,"type":"PipeWire:Interface:Port","info":{"props":{
+            "node.name":"aeye-spike04-synthetic","media.class":"Video/Source"}}}]"#;
+        assert!(!is_synthetic_node_dump(not_node, 5));
+        assert!(!is_synthetic_node_dump("not json", 5));
+        assert!(!is_synthetic_node_dump("[]", 5));
     }
 
     #[test]

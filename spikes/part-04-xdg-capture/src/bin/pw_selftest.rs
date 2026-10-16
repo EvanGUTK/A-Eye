@@ -2,11 +2,20 @@
 //! WITHOUT touching the screen. It consumes a synthetic test-pattern node:
 //!
 //! ```text
+//! # terminal 1 (keep running; find the node id with `pw-dump | grep -B3 aeye-spike04`)
 //! gst-launch-1.0 videotestsrc pattern=solid-color foreground-color=0xff3366cc is-live=true \
-//!   ! video/x-raw,format=BGRx,width=320,height=200 \
-//!   ! pipewiresink stream-properties="props,media.class=Video/Source"   # keep running
-//! cargo run --manifest-path spikes/part-04-xdg-capture/Cargo.toml --bin pw_selftest -- <node-id>
+//!   ! video/x-raw,format=BGRx,width=320,height=200,framerate=15/1 \
+//!   ! pipewiresink stream-properties="props,media.class=Video/Source,node.name=aeye-spike04-synthetic"
+//! # terminal 2
+//! cargo run --manifest-path spikes/part-04-xdg-capture/Cargo.toml \
+//!   --features dev-selftest --bin pw_selftest -- <node-id>
 //! ```
+//!
+//! Safety gate: the node id given must be a Node whose `info.props` has
+//! `node.name == "aeye-spike04-synthetic"` and `media.class == "Video/Source"`
+//! (parsed from `pw-dump <id>` JSON, exact comparison); anything else is
+//! refused with exit code 2. Note the producer exits when the consumer
+//! disconnects, so start a fresh pipeline for each run.
 //!
 //! The pattern is solid ARGB 0xff3366cc, so every decoded pixel must be
 //! RGB (0x33, 0x66, 0xcc). This validates format negotiation, buffer type,
@@ -15,7 +24,7 @@
 
 use std::time::Duration;
 
-use spike_04_xdg_capture::pw;
+use spike_04_xdg_capture::{pw, sysinfo};
 
 fn main() {
     let Some(node) = std::env::args().nth(1).and_then(|a| a.parse::<u32>().ok()) else {
@@ -29,8 +38,12 @@ fn main() {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    if !dump.contains("aeye-spike04-synthetic") {
-        eprintln!("refusing: node {node} is not the synthetic node 'aeye-spike04-synthetic'");
+    if !sysinfo::is_synthetic_node_dump(&dump, node) {
+        eprintln!(
+            "refusing: node {node} is not a Node with node.name='{}' and media.class='{}'",
+            sysinfo::SYNTHETIC_NODE_NAME,
+            sysinfo::SYNTHETIC_MEDIA_CLASS
+        );
         std::process::exit(2);
     }
     println!("pw_selftest: synthetic node {node} (NOT a portal stream, NOT the screen)");
