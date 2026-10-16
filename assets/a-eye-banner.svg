@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="360" viewBox="0 0 1440 360" role="img" aria-labelledby="title desc">
+<title id="title">A-Eye — Point. Speak. Build.</title><desc id="desc">Graphite and orange project banner with a precise focus-frame symbol.</desc>
+<rect width="1440" height="360" fill="#101214"/>
+<g fill="none" stroke="#272c31" stroke-width="1"><path d="M0 300H1440M1000 0V360M1240 0V360"/></g>
+<text x="70" y="68" font-family="Arial, sans-serif" font-size="14" letter-spacing="4" fill="#B5B6B9">VOICE + VISUAL CONTEXT FOR CODING AGENTS</text>
+<text x="65" y="187" font-family="Arial, sans-serif" font-size="110" font-weight="700" letter-spacing="-5" fill="#F3F0EA">A-Eye<tspan fill="#FF8A3D">.</tspan></text>
+<text x="72" y="245" font-family="Arial, sans-serif" font-size="29" fill="#F3F0EA">Point. Speak. Build.</text>
+<text x="72" y="331" font-family="Arial, sans-serif" font-size="14" fill="#B5B6B9">RESEARCH FOUNDATION  /  WINDOWS FIRST  /  MCP + MANAGED SESSIONS</text>
+<g fill="none" stroke="#FF8A3D" stroke-width="4"><path d="M1080 112V82H1110M1230 82H1260V112M1260 232V262H1230M1110 262H1080V232"/><ellipse cx="1170" cy="172" rx="67" ry="37"/><circle cx="1170" cy="172" r="17"/></g>
+<path d="M1213 205L1244 222L1228 227L1222 244Z" fill="#F3F0EA"/>
+</svg>

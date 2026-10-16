@@ -1,0 +1,33 @@
+{
+  "schema_version": "0.1.0-draft",
+  "observation_id": "synthetic-observation-001",
+  "session_id": "synthetic-session-001",
+  "capture_epoch": 3,
+  "sequence": 12,
+  "captured_at": "2026-10-15T23:00:00Z",
+  "monotonic_ms": 42000,
+  "monitor_id": "synthetic-display-2",
+  "scope": {
+    "mode": "watch-region",
+    "coordinate_space": "monitor-local-physical-pixels",
+    "x": 480,
+    "y": 240,
+    "width": 640,
+    "height": 480
+  },
+  "pointer": {
+    "x": 320,
+    "y": 200,
+    "coordinate_space": "crop-local-physical-pixels",
+    "anchored_at": "2026-10-15T22:59:59Z"
+  },
+  "image": {
+    "mime_type": "image/png",
+    "width": 640,
+    "height": 480,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "buffer_id": "synthetic-buffer-no-image-attached"
+  },
+  "transform": {"scale_x": 1, "scale_y": 1, "rotation_degrees": 0},
+  "redacted": false
+}
