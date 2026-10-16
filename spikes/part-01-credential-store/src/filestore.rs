@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::{BackendError, CredentialBackend};
 
@@ -184,7 +184,13 @@ fn derive_key(
 }
 
 fn serialize(secrets: &Secrets) -> Result<Zeroizing<Vec<u8>>, FileStoreError> {
-    let mut out = Zeroizing::new(Vec::new());
+    // Reserve the exact size up front: a growing Vec would reallocate and leave
+    // un-zeroized plaintext copies in freed heap blocks.
+    let total: usize = 4 + secrets
+        .iter()
+        .map(|(k, v)| 2 + k.len() + 4 + v.len())
+        .sum::<usize>();
+    let mut out = Zeroizing::new(Vec::with_capacity(total));
     let count = u32::try_from(secrets.len())
         .map_err(|_| FileStoreError::Internal("too many entries".into()))?;
     out.extend_from_slice(&count.to_be_bytes());
@@ -198,7 +204,17 @@ fn serialize(secrets: &Secrets) -> Result<Zeroizing<Vec<u8>>, FileStoreError> {
         out.extend_from_slice(&vl.to_be_bytes());
         out.extend_from_slice(v.as_bytes());
     }
+    debug_assert_eq!(out.len(), total);
     Ok(out)
+}
+
+/// UTF-8 decode that wipes the rejected bytes (they may be secret material).
+fn utf8_or_zeroize(bytes: Vec<u8>, what: &'static str) -> Result<String, FileStoreError> {
+    String::from_utf8(bytes).map_err(|e| {
+        let mut raw = e.into_bytes();
+        raw.zeroize();
+        FileStoreError::BadFormat(what)
+    })
 }
 
 struct Cursor<'a>(&'a [u8]);
@@ -220,11 +236,9 @@ fn deserialize(bytes: &[u8]) -> Result<Secrets, FileStoreError> {
     let mut out = Secrets::new();
     for _ in 0..count {
         let kl = u16::from_be_bytes(c.take(2)?.try_into().expect("2 bytes")) as usize;
-        let k = String::from_utf8(c.take(kl)?.to_vec())
-            .map_err(|_| FileStoreError::BadFormat("account not utf-8"))?;
+        let k = utf8_or_zeroize(c.take(kl)?.to_vec(), "account not utf-8")?;
         let vl = u32::from_be_bytes(c.take(4)?.try_into().expect("4 bytes")) as usize;
-        let v = String::from_utf8(c.take(vl)?.to_vec())
-            .map_err(|_| FileStoreError::BadFormat("secret not utf-8"))?;
+        let v = utf8_or_zeroize(c.take(vl)?.to_vec(), "secret not utf-8")?;
         out.insert(k, Zeroizing::new(v));
     }
     if !c.0.is_empty() {
@@ -533,5 +547,31 @@ mod tests {
 
         // Empty store still round-trips.
         assert!(decrypt_file(&good, b"pw").unwrap().is_empty());
+    }
+
+    #[test]
+    fn serialize_reserves_exact_capacity() {
+        let mut m = Secrets::new();
+        for i in 0..50 {
+            m.insert(format!("p:{i}"), Zeroizing::new("x".repeat(100 + i)));
+        }
+        let out = serialize(&m).unwrap();
+        assert_eq!(out.capacity(), out.len(), "Vec reallocated while growing");
+        assert_eq!(deserialize(&out).unwrap().len(), 50);
+    }
+
+    #[test]
+    fn invalid_utf8_payload_is_rejected() {
+        // count=1, key "k", secret = 0xff 0xfe (invalid UTF-8)
+        let mut p = Vec::new();
+        p.extend_from_slice(&1u32.to_be_bytes());
+        p.extend_from_slice(&1u16.to_be_bytes());
+        p.push(b'k');
+        p.extend_from_slice(&2u32.to_be_bytes());
+        p.extend_from_slice(&[0xff, 0xfe]);
+        assert_eq!(
+            deserialize(&p).unwrap_err(),
+            FileStoreError::BadFormat("secret not utf-8")
+        );
     }
 }
