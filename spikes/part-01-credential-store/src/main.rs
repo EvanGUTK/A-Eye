@@ -480,8 +480,8 @@ impl Record {
                 id,
                 NAME,
                 format!(
-                    "canary not found, but scan incomplete (timed_out={}); {detail}",
-                    r.timed_out
+                    "canary not found, but scan INCOMPLETE (timed_out={}, unresolvable roots={:?}); {detail}",
+                    r.timed_out, r.roots_missing
                 ),
             );
         } else {

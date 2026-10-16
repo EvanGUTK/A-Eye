@@ -1,5 +1,6 @@
 //! Disk-plaintext check (issue #4): look for the canary bytes under a set of
-//! roots without printing any file content. Symlinks are not followed.
+//! roots without printing any file content. A symlinked root is resolved once;
+//! symlinks encountered while walking are never followed.
 
 use std::fs;
 use std::io::Read;
@@ -20,9 +21,13 @@ pub struct ScanResult {
 }
 
 impl ScanResult {
-    /// A "not found" verdict is only trustworthy if nothing was skipped.
+    /// A "not found" verdict is only trustworthy if every root was resolved and
+    /// read and nothing was skipped.
     pub fn complete(&self) -> bool {
-        !self.timed_out && self.unreadable == 0 && self.skipped_large == 0
+        !self.timed_out
+            && self.unreadable == 0
+            && self.skipped_large == 0
+            && self.roots_missing.is_empty()
     }
 }
 
@@ -50,10 +55,12 @@ pub fn scan_for_canary(roots: &[PathBuf], needle: &[u8], budget: Duration) -> Sc
     let mut res = ScanResult::default();
     let mut stack: Vec<PathBuf> = Vec::new();
     for r in roots {
-        if r.exists() {
-            stack.push(r.clone());
-        } else {
-            res.roots_missing.push(r.clone());
+        // Follow a symlink only at the ROOT (common for dotfile setups); anything
+        // found inside the walk is never followed. A root that cannot be resolved
+        // is recorded as missing, which makes the scan incomplete.
+        match fs::canonicalize(r) {
+            Ok(real) => stack.push(real),
+            Err(_) => res.roots_missing.push(r.clone()),
         }
     }
     while let Some(p) = stack.pop() {
@@ -166,5 +173,67 @@ mod tests {
         assert!(r.found_in.is_empty());
         fs::remove_dir_all(d).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn symlinked_root_is_scanned_and_canary_found() {
+        let real = tmp("root-real");
+        let holder = tmp("root-holder");
+        fs::write(real.join("f"), b"..AEYE-SPIKE-CANARY-root..").unwrap();
+        let link = holder.join("config-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let r = scan_for_canary(
+            std::slice::from_ref(&link),
+            b"AEYE-SPIKE-CANARY-root",
+            Duration::from_secs(5),
+        );
+        assert_eq!(r.files_scanned, 1, "symlinked root was not read");
+        assert_eq!(r.found_in.len(), 1);
+        assert!(r.complete());
+        fs::remove_dir_all(real).unwrap();
+        fs::remove_dir_all(holder).unwrap();
+    }
+
+    #[test]
+    fn missing_or_dangling_root_makes_scan_incomplete() {
+        let d = tmp("incomplete");
+        fs::write(d.join("f"), b"nothing here").unwrap();
+        let dangling = d.join("dangling");
+        std::os::unix::fs::symlink(d.join("does-not-exist"), &dangling).unwrap();
+        for bad in [PathBuf::from("/nonexistent/aeye-spike-root"), dangling] {
+            let r = scan_for_canary(
+                &[d.clone(), bad.clone()],
+                b"AEYE-SPIKE-CANARY-none",
+                Duration::from_secs(5),
+            );
+            assert!(r.found_in.is_empty());
+            assert_eq!(r.roots_missing, vec![bad.clone()], "{bad:?}");
+            assert!(!r.complete(), "{bad:?} must make the scan incomplete");
+        }
+        // Control: a scan whose roots all resolve is complete.
+        let ok = scan_for_canary(std::slice::from_ref(&d), b"x", Duration::from_secs(5));
+        assert!(ok.complete());
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn symlink_inside_a_symlinked_root_walk_is_still_not_followed() {
+        let outside = tmp("inner-out");
+        fs::write(outside.join("f"), b"AEYE-SPIKE-CANARY-inner").unwrap();
+        let real = tmp("inner-real");
+        std::os::unix::fs::symlink(&outside, real.join("inner-link")).unwrap();
+        let holder = tmp("inner-holder");
+        let link = holder.join("root-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let r = scan_for_canary(
+            std::slice::from_ref(&link),
+            b"AEYE-SPIKE-CANARY-inner",
+            Duration::from_secs(5),
+        );
+        assert!(r.found_in.is_empty());
+        assert!(r.complete());
+        for d in [outside, real, holder] {
+            fs::remove_dir_all(d).unwrap();
+        }
     }
 }
