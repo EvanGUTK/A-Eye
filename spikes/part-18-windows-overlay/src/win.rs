@@ -645,6 +645,17 @@ pub fn run() {
     let started = Instant::now();
     while pump_messages() {
         let t = started.elapsed();
+        // A Ctrl+C that arrived before the overlay existed only latched the reason; honour it.
+        // SAFETY: IsWindow accepts any handle value; the window is ours, on its own thread.
+        if STOP_REASON.load(Ordering::SeqCst) == STOP_CTRL_C
+            && unsafe { IsWindow(Some(hwnd)) }.as_bool()
+        {
+            unsafe {
+                let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
+                let _ = DestroyWindow(hwnd);
+            }
+            continue;
+        }
         if !checked && t >= SETTLE {
             checked = true;
             // SAFETY: plain query.
@@ -652,7 +663,9 @@ pub fn run() {
             fg_after_json = foreground_json(fg_after);
             checks.extend(live_checks(hwnd, region, fg_before, fg_after));
         }
-        if args.selftest_hotkey && hotkey_injected.is_none() && t >= SELFTEST_HOTKEY_AT {
+        // Never inject the chord unless this process owns it: otherwise it would reach another app.
+        if args.selftest_hotkey && hotkey_ok && hotkey_injected.is_none() && t >= SELFTEST_HOTKEY_AT
+        {
             hotkey_injected = Some(inject_stop_hotkey());
         }
         // In the self-test the hotkey is the intended stop path; the timeout is only a fallback.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{json, Value};
 use windows::core::{Interface, BOOL};
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
@@ -411,7 +411,7 @@ pub fn run() {
                 false,
                 format!("{:?}", other.err()),
             ));
-            return finish(&checks, false);
+            return finish(checks, Vec::new(), Value::Null);
         }
     };
     checks.push(check(
@@ -450,14 +450,14 @@ pub fn run() {
             false,
             "no monitor matches --monitor",
         ));
-        return finish(&checks, false);
+        return finish(checks, Vec::new(), Value::Null);
     }
 
     let gpu = match create_gpu() {
         Ok(g) => g,
         Err(e) => {
             checks.push(check("W5", "D3D11 device created", false, e.to_string()));
-            return finish(&checks, false);
+            return finish(checks, Vec::new(), Value::Null);
         }
     };
     checks.push(check(
@@ -470,7 +470,7 @@ pub fn run() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out");
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
         checks.push(check("W6", "out/ created", false, e.to_string()));
-        return finish(&checks, false);
+        return finish(checks, Vec::new(), Value::Null);
     }
 
     let mut captured_scales: HashSet<u32> = HashSet::new();
@@ -585,29 +585,22 @@ pub fn run() {
         }
     });
 
-    let record = json!({
-        "spike": 17,
-        "cursor": { "x": cursor.x, "y": cursor.y, "monitor_index": cursor_on },
-        "captures": evidence,
-        "checks": checks.iter().map(|c| json!({
-            "id": c.id, "name": c.name, "status": c.status.label(), "detail": c.detail
-        })).collect::<Vec<_>>(),
-    });
-    let record_path = out_dir.join("record.json");
-    match serde_json::to_vec_pretty(&record) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(&record_path, bytes) {
-                eprintln!("could not write {}: {e}", record_path.display());
-            }
-        }
-        Err(e) => eprintln!("could not serialise record: {e}"),
-    }
-    finish(&checks, !evidence.is_empty());
+    let cursor_json = json!({ "x": cursor.x, "y": cursor.y, "monitor_index": cursor_on });
+    finish(checks, evidence, cursor_json);
 }
 
-fn finish(checks: &[Check], captured_any: bool) {
+/// Writes `out/record.json` (always, so a stopped run never leaves an older record that looks
+/// current), then prints the checks and the one-line spike status.
+fn finish(mut checks: Vec<Check>, captures: Vec<Value>, cursor: Value) {
+    let captured_any = !captures.is_empty();
+    let record_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("out")
+        .join("record.json");
+    let record_check = write_record(&record_path, &checks, captures, cursor);
+    checks.push(record_check);
+
     println!("\n== checks ==");
-    for c in checks {
+    for c in &checks {
         println!("  [{}] {} {}: {}", c.status.label(), c.id, c.name, c.detail);
     }
     let line = if let Some(c) = checks.iter().find(|c| c.status == Status::Fail) {
@@ -627,4 +620,32 @@ fn finish(checks: &[Check], captured_any: bool) {
             .to_string()
     };
     println!("\n{line}");
+}
+
+/// The record lists the checks as they stand before this write; its own outcome is returned as
+/// check R1 so a failed write turns the spike status into NOT proven.
+fn write_record(path: &Path, checks: &[Check], captures: Vec<Value>, cursor: Value) -> Check {
+    let record = json!({
+        "spike": 17,
+        "cursor": cursor,
+        "captures": captures,
+        "checks": checks.iter().map(|c| json!({
+            "id": c.id, "name": c.name, "status": c.status.label(), "detail": c.detail
+        })).collect::<Vec<_>>(),
+    });
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .map_err(|e| format!("create out/: {e}"))
+        .and_then(|()| serde_json::to_vec_pretty(&record).map_err(|e| format!("serialise: {e}")))
+        .and_then(|bytes| std::fs::write(path, bytes).map_err(|e| format!("write: {e}")));
+    check(
+        "R1",
+        "out/record.json written",
+        written.is_ok(),
+        match written {
+            Ok(()) => path.display().to_string(),
+            Err(e) => e,
+        },
+    )
 }

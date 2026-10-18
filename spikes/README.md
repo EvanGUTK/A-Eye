@@ -3,7 +3,7 @@
 Each part is a standalone Rust binary proving exactly one capability.
 No part depends on another being merged — integration happens after all spikes pass.
 
-Status values: `todo`, `merged (<what is proven>)`. A merged spike lists what was **not** proven;
+Status values: `todo`, `paused`, `done on branch <name>, not merged (<what is proven>)`, `merged (<what is proven>)`. A spike lists what was **not** proven;
 a merged spike is not a finished capability. Details are in each spike's capability record
 (`cargo run --manifest-path spikes/part-XX-<name>/Cargo.toml`) and in its PR.
 
