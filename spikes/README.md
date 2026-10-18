@@ -25,8 +25,8 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | 14 | Codex app-server managed session | todo | |
 | 15 | Claude SDK managed session | todo | |
 | 16 | Tauri shell + AppImage | todo | |
-| 17 | Windows.Graphics.Capture monitor frame | **next** (Windows platform pivot) | |
-| 18 | Win32 layered-window orange border overlay | **next** (Windows platform pivot) | |
+| 17 | Windows.Graphics.Capture monitor frame | done on branch `feat/spike-17-18-windows`, not merged (#23): real frame of each of 4 monitors (one portrait) captured via windows-rs and saved as PNG (size matches the monitor, not uniform); monitor handle, device, DPI scale and cursor position recorded; two-monitor different-scale (M2) **unverified** (all 4 monitors are at 100%); PNG contents not inspected by eye | #23 open |
+| 18 | Win32 layered-window orange border overlay | done on branch `feat/spike-17-18-windows`, not merged (#24): layered, click-through, non-activating, topmost window drew a border over the primary monitor (composited pixel read back as the orange); foreground window unchanged, with a control showing an ordinary window does change it; click-through and local close (timeout and injected Ctrl+Alt+Q) proven; Ctrl+C and external WM_CLOSE stop paths **unverified**; the `--region` argument, non-primary monitors and non-100% scales untested; border not inspected by eye | #24 open |
 
 ## Platform pivot (2026-10-18)
 
