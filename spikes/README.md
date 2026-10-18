@@ -13,7 +13,7 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified | #7 #8 closed; #9 #10 open |
 | 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01) | #11 #12 open |
 | 04 | XDG ScreenCast + PipeWire frame | merged (#18): real frame captured via portal and saved as PNG on Hyprland; monitor id/scale (M1) and two-monitor different-scale (M2) unverified | #14 closed; #13 #15 open |
-| 05 | wlr-layer-shell orange border | todo | |
+| 05 | wlr-layer-shell orange border | paused (Linux-only overlay; see platform pivot below) | |
 | 06 | Ollama vision (local model) | todo | |
 | 07 | evdev global hotkey | todo | |
 | 08 | Voice: whisper.cpp STT + piper TTS | todo | |
@@ -25,6 +25,25 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | 14 | Codex app-server managed session | todo | |
 | 15 | Claude SDK managed session | todo | |
 | 16 | Tauri shell + AppImage | todo | |
+| 17 | Windows.Graphics.Capture monitor frame | **next** (Windows platform pivot) | |
+| 18 | Win32 layered-window orange border overlay | **next** (Windows platform pivot) | |
+
+## Platform pivot (2026-10-18)
+
+Development moved from a Linux/WSL machine to a real Windows desktop. Per the proposed stack
+("Windows Graphics Capture first"), native capture/overlay work now targets Windows first.
+Parts 05-16 above are Linux/cross-platform work and are **paused, not deleted** — they resume
+once the Windows capture+overlay pair is proven. Parts 17-18 are the Windows equivalents of the
+already-merged part 04 (capture) and the paused part 05 (border overlay): Windows.Graphics.Capture
+API for frame capture, and a Win32 layered/transparent, non-activating topmost window for the
+orange border, in place of XDG portal/PipeWire and wlr-layer-shell.
+
+Build note: the repo lives in the WSL filesystem (`~/projects/code/A-Eye`), but native Windows
+binaries must be compiled with the Windows-side `cargo`/`rustc` (confirmed present: cargo 1.99.0).
+Build via `powershell.exe` against the UNC path `\\wsl$\Ubuntu\home\usaas\projects\code\A-Eye\...`.
+Cargo's default incremental-compilation lock fails over a UNC path ("could not create session
+directory lock file"); set `CARGO_TARGET_DIR` to a local Windows path (e.g. `$env:TEMP\aeye-target`)
+to avoid it. Confirmed working with `cargo check --target x86_64-pc-windows-msvc`.
 
 ## What is still unverified (parts 01-04)
 
