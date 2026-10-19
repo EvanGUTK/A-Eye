@@ -11,6 +11,9 @@ Uses OpenAI's documented "Sign in with ChatGPT" route for open-source apps. A-Ey
 own client through the authorize endpoint; it does not borrow the Codex CLI's client id, and you
 supply no id, key or secret.
 
+Run from the repository root. Until this branch (`agents/sessions`) is merged, the code exists only
+in its worktree, so use that as the root:
+
 ```bash
 cd ~/projects/code/A-Eye-worktrees/sessions
 cargo run --manifest-path spikes/part-02-codex-oauth/Cargo.toml -- --live-plan-usage
