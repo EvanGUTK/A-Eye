@@ -21,6 +21,15 @@ Date: 2026-10-15. All decisions below are **proposed**, not experimentally valid
 | 015 | Local Ollama model for A-Eye's internal visual processing | Keeps frame change detection and evidence description on-device; no API cost; low latency; works offline | A measured spike shows local inference is too slow or inaccurate on target hardware |
 | 016 | Grok via API key (no OAuth) | xAI has no consumer OAuth subscription path; OpenAI-compatible API means no separate adapter required | xAI introduces an OAuth flow |
 | 017 | Two-tier model architecture: local (Ollama) for evidence intelligence + OAuth provider for coding work | Separates fast cheap on-device inference from expensive repository-aware coding agent; neither layer can be conflated with the other | A single provider offers both real-time vision and coding at acceptable cost and latency |
+| 018 | Windows-first (supersedes ADR013) | Development moved to a real Windows desktop; ADR013's revisit trigger ("Windows demand is demonstrated and a dedicated maintainer is available") is now true. Confirmed native build bridge (WSL repo + Windows-side cargo/rustc over UNC path); parts 09, 16, 17, 18 all built and proven Windows-native | Linux/Wayland demand is demonstrated and a dedicated maintainer picks it back up (parts 05-07, 10-15 stay paused, not deleted) |
+| 019 | Voice engine stays on archived MIT piper; only CC0/MIT-licensed voice models ship | piper's maintained successor (piper1-gpl) is GPL-3.0, which would force any linking/combined work to also be GPL-3.0 — incompatible with A-Eye's MIT license and a commercial/SaaS distribution model. Several common piper voices are CC BY-NC-SA (non-commercial), which blocks commercial shipping outright regardless of engine. Decided by the human (CEO call via hermes), 2026-10-18, after part-08's spike flagged the gap | A legal review clears GPL-3.0 isolation (e.g. confirmed arm's-length external-process boundary) or a non-GPL maintained TTS alternative is adopted |
+
+## Open follow-up: confirm a shippable voice model (tracks ADR019)
+
+part-08's spike pinned `piper 2023.11.14-2` (archived, MIT) and voice `en_US-lessac-medium` (trained on Blizzard 2013; exact license not yet confirmed here). Before voice ships as a real feature (not a spike), confirm in writing:
+1. The archived piper binary's exact license text (not just "last MIT release" by assumption).
+2. At least one specific voice model confirmed MIT/CC0/Apache — not CC BY-NC-SA — suitable for commercial distribution.
+3. Re-check piper1-gpl isn't silently pulled in as a transitive dependency anywhere in the build.
 
 ## Decision template
 
