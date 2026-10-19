@@ -1,6 +1,6 @@
 # HANDOFF — resume here
 
-Last updated 2026-10-18 by hermes (orchestrator). Read this first on resume, before re-reading
+Last updated 2026-10-19 by hermes (orchestrator). Read this first on resume, before re-reading
 `spikes/README.md`, `docs/planning/ROADMAP.md`'s "Current status" section, or the Obsidian project
 log at `AI Projects/A-Eye.md` (path: `/mnt/e/VAULT/USAAS/AI Projects/A-Eye.md`) — this file is the
 short version, those are the detailed ones.
@@ -20,9 +20,18 @@ short version, those are the detailed ones.
   `docs/planning/ROADMAP.md` → "Current status (2026-10-18)".
 - The first real runnable product exists: `apps/desktop` (PR #43) — a Tauri window hosting the
   part-09 MCP server as a sidecar, with live monitor list, overlay controls, and frame preview.
-  It is NOT yet wired to scope leases (part-10) or voice (part-08). Vision (part-06) is wired as an
-  explicit "Describe frame" button (#47) but has only been tested with fixtures: it still needs a
-  Windows build and a live local-Ollama run.
+  As of today (PRs #49, #48, #50, all merged, built/tested on Linux only — none live-verified on
+  Windows yet):
+  - part-09's capture/overlay tools now require a valid lease (part-10's `LeaseBroker`) instead of
+    the blunt `--allow-capture` flag; lease grant is still auto-approved inside the MCP tool call
+    (no GUI consent prompt yet) — documented as a known gap, not hidden.
+  - Codex OAuth tokens persist via the part-01 credential store and reload/refresh on startup
+    instead of re-running the full OAuth dance every launch (issue #10 closed).
+  - Vision (part-06) is wired as an explicit "Describe frame" button (issue #47 closed, PR #50) —
+    captures a frame, sends it to a local Ollama vision model (default `qwen3-vl:2b`), shows the
+    text description in the UI. Follow-up issue #51 opened: Windows owner-PID check on the loopback
+    Ollama port (currently any local process on that port could receive the frame).
+  - Still not wired: voice (part-08) into `apps/desktop`.
 
 ## Open decisions that need the human, not an agent
 
@@ -36,8 +45,10 @@ short version, those are the detailed ones.
 ## Immediate next steps (engineering, no human decision needed first)
 
 See `docs/planning/ROADMAP.md`'s "Current status" section for the full ranked list. Short version:
-wire scope leases into part-09 (replace `--allow-capture`), persist Codex tokens via the part-01
-credential store (issue #10), and live-verify the vision wire-up in `apps/desktop` on Windows.
+live-verify today's three merges on the real Windows machine (scope leases gating capture/overlay,
+Codex token persistence, vision "Describe frame" against a real Ollama install), replace the
+auto-approve lease grant with a real GUI consent prompt, and address follow-up issue #51 (Windows
+owner-PID check on the loopback Ollama port). Then: wire voice (part-08) into `apps/desktop`.
 
 ## Standing operating rules (from the user, this session)
 
