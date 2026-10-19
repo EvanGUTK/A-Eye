@@ -72,8 +72,8 @@ try {
     Write-Host "process tree: app + $($descendants.Count) descendants: $byName"
     Write-Host "tree pids: $($pids -join ',')"
 
-    $tcp = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $pids -contains $_.OwningProcess })
-    $udp = @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $pids -contains $_.OwningProcess })
+    $tcp = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess })
+    $udp = @(Get-NetUDPEndpoint -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess })
     Write-Host "TCP sockets owned by tree: $($tcp.Count)"
     $tcp | ForEach-Object { Write-Host "  TCP $($_.State) $($_.LocalAddress):$($_.LocalPort) -> $($_.RemoteAddress):$($_.RemotePort) pid=$($_.OwningProcess)" }
     Write-Host "UDP endpoints owned by tree: $($udp.Count)"
@@ -84,7 +84,7 @@ try {
 
     $after = Get-ListeningPorts
     $newListeners = @($after | Where-Object { $before -notcontains $_ })
-    Write-Host "new system-wide TCP listeners since before launch: $($newListeners.Count) $($newListeners -join ', ')"
+    Write-Host "new system-wide TCP listeners since before launch (informational, any process): $($newListeners.Count) $($newListeners -join ', ')"
 
     if ($Screenshot) {
         [void][WinApi]::SetForegroundWindow($hwnd)
@@ -105,9 +105,11 @@ try {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 }
 
-# The gate is TCP: a browser-reachable local web server needs a TCP listener. UDP endpoints are
-# reported for the record (WebView2's own network service owns one) but do not gate the result.
-$netOk = ($tcp.Count -eq 0) -and ($newListeners.Count -eq 0)
+# The gate is TCP sockets owned by the app's process tree: a browser-reachable local web server needs a
+# TCP listener. UDP endpoints and the system-wide listener diff are reported for the record (other
+# Windows processes may open listeners meanwhile; WebView2's network service may own a UDP socket) but
+# do not gate the result.
+$netOk = ($tcp.Count -eq 0)
 Write-Host ("RESULT window={0} no_tcp_endpoints={1} udp_endpoints={2} (reported, not gated)" -f $(if ($windowOk) { 'PASS' } else { 'FAIL' }), $(if ($netOk) { 'PASS' } else { 'FAIL' }), $udp.Count)
 if (-not ($windowOk -and $netOk)) { exit 1 }
 

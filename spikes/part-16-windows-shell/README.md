@@ -39,7 +39,7 @@ From Windows PowerShell with the repo on a UNC path:
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$env:TEMP\aeye-target-16"      # dodges the UNC incremental-lock bug
-Set-Location '\\wsl$\Ubuntu\home\usaas\projects\code\A-Eye-worktrees\packaging\spikes\part-16-windows-shell'
+Set-Location '<UNC or local path to this checkout>\spikes\part-16-windows-shell'   # e.g. \\wsl$\<distro>\home\<user>\...
 npm install                                              # works over UNC (2 packages)
 node node_modules\@tauri-apps\cli\tauri.js build         # NOT `npm run tauri` / `npx`, see below
 ```
@@ -77,7 +77,8 @@ Proven on this machine (Windows desktop, 2026-10-18):
   its own origin as `http://tauri.localhost/` (no port).
 - **No web server / no LAN listener**: in the app process plus its 6 `msedgewebview2.exe` descendants,
   0 TCP sockets in any state (so no listener on `0.0.0.0`, `::` or loopback), and no new system-wide
-  TCP listener appeared after launch. The release build serves `ui/` from the binary through
+  TCP listener appeared after launch (reported by `verify.ps1`, informational only because any process
+  could cause one). The release build serves `ui/` from the binary through
   WebView2's in-process custom-protocol virtual host; no dev server is involved (`tauri.conf.json`
   has no `devUrl`, and no `tauri dev` was run).
 
