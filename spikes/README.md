@@ -17,7 +17,7 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | 06 | Ollama vision (local model) | todo | |
 | 07 | evdev global hotkey | todo | |
 | 08 | Voice: whisper.cpp STT + piper TTS | todo | |
-| 09 | MCP stdio server (7 tools) | todo | |
+| 09 | MCP stdio server (5 tools over Windows capture + overlay) | done on branch `agents/mcp-bridge`, not merged (#28): hand-written MCP 2025-11-25 server over stdio only (no network listener; zero TCP/UDP endpoints on the process), tools list/capture/overlay start+stop/cursor; capture is off unless started with `--allow-capture` (no scope leases yet); live run through the real binary: capture size matches, orange border seen in a capture of **all 4 monitors** (one portrait), colour param, expiry, injected Ctrl+Alt+Q, stop on stdin close, second server refuses while hotkey held; Claude Code 2.1.303 completed the handshake and called `aeye_list_monitors`. **Unverified:** a host rendering the image result, Codex CLI as host, mixed-DPI (all monitors 100%), borders not inspected by eye, external WM_CLOSE path | #28 open |
 | 10 | Scope leases + epoch revocation | todo | |
 | 11 | Coordinate transforms + crop pipeline | todo | |
 | 12 | Observation envelope validation | todo | |
