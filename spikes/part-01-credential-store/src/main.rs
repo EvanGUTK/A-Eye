@@ -16,6 +16,7 @@ use spike_01_credential_store::{backend, filestore};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -529,14 +530,17 @@ fn exercise_file_fallback(rec: &mut Record, dir: &Path) {
     }
 
     let bytes = fs::read(&path).unwrap_or_default();
+    #[cfg(unix)]
     let fmode = fs::metadata(&path)
         .map(|m| m.permissions().mode() & 0o777)
         .unwrap_or(0);
+    #[cfg(unix)]
     let dmode = path
         .parent()
         .and_then(|p| fs::metadata(p).ok())
         .map(|m| m.permissions().mode() & 0o777)
         .unwrap_or(0);
+    #[cfg(unix)]
     if fmode == 0o600 && dmode == 0o700 {
         rec.pass(
             "FS-02",
@@ -550,6 +554,12 @@ fn exercise_file_fallback(rec: &mut Record, dir: &Path) {
             format!("file {fmode:o}, dir {dmode:o}"),
         );
     }
+    #[cfg(not(unix))]
+    rec.unverified(
+        "FS-02",
+        "File mode 0600 (dir 0700)",
+        "POSIX mode bits do not apply on this platform; private-file guarantee relies on NTFS ACLs, not checked here",
+    );
 
     let leaks = scan::contains(&bytes, canary.as_bytes())
         || scan::contains(&bytes, b"AEYE-SPIKE-CANARY")

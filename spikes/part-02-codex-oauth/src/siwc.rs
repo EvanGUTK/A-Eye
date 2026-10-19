@@ -427,6 +427,7 @@ mod tests {
         assert!(!scope_contains(None, PLAN_USAGE_SCOPE));
     }
 
+    #[cfg(unix)]
     #[test]
     fn host_id_is_created_once_then_reused_and_owner_only() {
         use std::os::unix::fs::PermissionsExt;

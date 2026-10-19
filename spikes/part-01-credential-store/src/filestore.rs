@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -335,25 +336,40 @@ pub fn decrypt_file(bytes: &[u8], passphrase: &[u8]) -> Result<Secrets, FileStor
     deserialize(&plaintext)
 }
 
-/// Write `bytes` to `path` with mode 0600 (parent dir 0700 if created), via a
-/// temp file in the same directory and an atomic rename.
+/// Write `bytes` to `path` with mode 0600 (parent dir 0700 if created) on Unix,
+/// via a temp file in the same directory and an atomic rename. On Windows the
+/// private-file mechanism is NTFS ACLs (inherited from the user's profile
+/// directory), not POSIX mode bits, so no equivalent `.mode()` call is made.
 fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), FileStoreError> {
     let io = |e: std::io::Error| FileStoreError::Io(e.to_string());
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    #[cfg(unix)]
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(parent)
         .map_err(io)?;
+    #[cfg(not(unix))]
+    fs::DirBuilder::new()
+        .recursive(true)
+        .create(parent)
+        .map_err(io)?;
     let tmp = path.with_extension("enc.tmp");
     let _ = fs::remove_file(&tmp);
+    #[cfg(unix)]
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
+        .open(&tmp)
+        .map_err(io)?;
+    #[cfg(not(unix))]
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
         .open(&tmp)
         .map_err(io)?;
     f.write_all(bytes).map_err(io)?;
@@ -365,6 +381,7 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), FileStoreError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     const PASS: &str = "unit-test-passphrase";
@@ -481,6 +498,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn file_mode_is_0600_and_dir_0700() {
         let dir = temp_dir("mode");
