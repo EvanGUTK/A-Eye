@@ -6,13 +6,14 @@
 //! the explicit [`Secret::expose`] call, which is grep-able in review.
 
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Secret(String);
+pub struct Secret(Zeroizing<String>);
 
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
-        Secret(value.into())
+        Secret(Zeroizing::new(value.into()))
     }
 
     /// Explicit access to the raw value. Use only at the point of transmission
@@ -33,7 +34,14 @@ impl Secret {
 
 impl<'de> serde::Deserialize<'de> for Secret {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d).map(Secret)
+        String::deserialize(d).map(Secret::new)
+    }
+}
+
+// Serialization is used only at the explicit credential-store/HTTP boundary.
+impl serde::Serialize for Secret {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.expose())
     }
 }
 

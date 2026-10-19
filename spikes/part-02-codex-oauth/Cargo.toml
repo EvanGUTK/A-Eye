@@ -2,7 +2,7 @@
 name = "a-eye-spike-02-codex-oauth"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A-Eye spike part 02: OAuth 2.0 + PKCE flow against a local mock provider, keyring storage"
 publish = false
 
@@ -20,3 +20,5 @@ serde_json = "=1.0.154"
 sha2 = "=0.11.1"
 time = { version = "=0.3.55", features = ["formatting"] }
 url = "=2.5.8"
+spike-01-credential-store = { path = "../part-01-credential-store" }
+zeroize = "=1.9.1" # already pinned by part 01; wipe serialized credential buffers

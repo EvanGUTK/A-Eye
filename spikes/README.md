@@ -1,7 +1,7 @@
 # A-Eye Spikes
 
 Each part is a standalone Rust binary proving exactly one capability.
-No part depends on another being merged — integration happens after all spikes pass.
+Most parts are independent; issue #10 integrates part 02 with part 01's credential backends.
 
 Status values: `todo`, `paused`, `done on branch <name>, not merged (<what is proven>)`, `merged (<what is proven>)`. A spike lists what was **not** proven;
 a merged spike is not a finished capability. Details are in each spike's capability record
@@ -10,7 +10,7 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | Part | Spike | Status | Issues |
 |---|---|---|---|
 | 01 | Credential store (keyring + fallback) | merged (#17): Secret Service and encrypted-file fallback proven; default keyring on the test machine is unencrypted (SS-05 FAIL) | #3 #4 #5 #6 closed |
-| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified. On branch `agents/sessions`, not merged: `--live-plan-usage` for OpenAI's documented open-source route, synthetic-mock tested; real binary reached the real token endpoint with a fake code (see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md)) | #7 #8 closed; #9 #10 open |
+| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified. On branch `agents/sessions`, not merged: `--live-plan-usage` for OpenAI's documented open-source route, synthetic-mock tested; real binary reached the real token endpoint with a fake code (see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md)). Persistence follow-up on `agents/codex-token-persist`, not merged: [part-01-backed token storage and startup refresh](part-02-codex-oauth/README.md), fixture-only Linux validation; live keyring/provider restart unverified. | #7 #8 closed; #9 #10 open |
 | 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01, re-read 2026-10-18, unchanged); no live run is prepared, see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md) | #11 #12 open |
 | 04 | XDG ScreenCast + PipeWire frame | merged (#18): real frame captured via portal and saved as PNG on Hyprland; monitor id/scale (M1) and two-monitor different-scale (M2) unverified | #14 closed; #13 #15 open |
 | 05 | wlr-layer-shell orange border | paused (Linux-only overlay; see platform pivot below) | |
@@ -59,7 +59,7 @@ to avoid it. Confirmed working with `cargo check --target x86_64-pc-windows-msvc
 
 ## Rules for spike code
 - Each spike is `cargo run` from its own directory
-- No shared crates until a spike graduates to the real app
+- Prefer standalone spikes; part 02 reuses part 01's credential library for issue #10
 - Output is evidence: print what you proved, print what failed
 - Each spike has its own Cargo.toml (workspace member later)
 

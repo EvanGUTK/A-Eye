@@ -190,6 +190,16 @@ See [LOCAL-MODEL.md](LOCAL-MODEL.md) for how Ollama is used.
 
 ## Token storage on Linux
 
+Implementation update (2026-10-19, issue #10): part 02's opt-in live modes now use
+part 01's Secret Service backend for a versioned token record and startup
+load/refresh. The record keeps all token fields, receipt time, endpoint, issued
+client ID, resource and refresh encoding. Account suffixes are caller-selected
+local aliases until verified identity is available. Refresh runs under a process
+lock and persists rotating credentials before reporting success. See the
+[part-02 README](../../spikes/part-02-codex-oauth/README.md) for fixture evidence and
+limitations. The encrypted-file fallback below remains a proposed live UX;
+part 02 uses FileStore only in synthetic restart tests, without an unlock UI.
+
 Tokens are stored via the **Secret Service D-Bus API**
 (`org.freedesktop.secrets`), provided by gnome-keyring or kwallet on most
 desktop Arch setups.

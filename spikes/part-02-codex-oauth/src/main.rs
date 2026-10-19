@@ -18,6 +18,7 @@ mod mock;
 #[cfg(test)]
 mod mock_plan;
 mod pkce;
+mod persistence;
 mod record;
 mod secret;
 mod siwc;
@@ -49,11 +50,12 @@ fn main() -> ExitCode {
                  --live     opt-in: print an authorization URL for a human to open. Requires\n\
                  \x20          A_EYE_OAUTH_CLIENT_ID, A_EYE_OAUTH_AUTH_URL, A_EYE_OAUTH_TOKEN_URL;\n\
                  \x20          optional A_EYE_OAUTH_SCOPE, A_EYE_OAUTH_CALLBACK_PORT, A_EYE_OAUTH_CALLBACK_PATH.\n\
-                 \x20          Tokens are NOT stored in live mode.\n\
+                 \x20          Tokens persist via part 01 Secret Service; startup loads/refreshes them.\n\
                  --live-plan-usage  opt-in: first registration + sign-in through OpenAI's documented\n\
                  \x20          \"Sign in with ChatGPT\" route for open-source apps. Needs no environment\n\
                  \x20          variables; listens on 127.0.0.1:1455 and prints a URL for a human to open.\n\
-                 \x20          Tokens are NOT stored; only lengths and fingerprints are printed."
+                 \x20          Tokens persist under a separate account alias; only fingerprints are printed.\n\
+                 \x20          A_EYE_OAUTH_ACCOUNT_ID selects a stable alias (defaults: default / plan-usage)."
             );
             ExitCode::SUCCESS
         }
@@ -373,12 +375,16 @@ fn run_live() -> ExitCode {
         callback_path: need("A_EYE_OAUTH_CALLBACK_PATH").unwrap_or_else(|| callback::DEFAULT_PATH.into()),
         callback_timeout: callback::DEFAULT_TIMEOUT,
     };
-    println!("LIVE mode. A-Eye will NOT open a browser. Open this URL yourself (waiting up to 5 minutes):\n");
-    let res = flow::run(&cfg, |u| println!("{u}\n"));
+    let _lock = match oauth_lock() { Ok(lock) => lock, Err(code) => return code };
+    let backend = spike_01_credential_store::backend::SecretServiceBackend::new(store::KEYRING_TIMEOUT);
+    let store = match session_store(&backend, "default") { Ok(store) => store, Err(code) => return code };
+    let res = flow::run_persisted(&cfg, &store, |u| {
+        println!("Open this URL yourself (waiting up to 5 minutes):\n{u}\n");
+    });
     match res {
         Ok(out) => {
             let t = out.tokens;
-            println!("token exchange succeeded (tokens are not printed or stored in live mode)");
+            println!("OAuth session ready; tokens persisted and read back through part 01 Secret Service");
             println!("  access_token  len={} fp={}", t.access_token.expose().len(), t.access_token.fingerprint());
             println!("  refresh_token {}", t.refresh_token.map_or("absent".into(), |s| format!("present fp={}", s.fingerprint())));
             println!("  id_token      {}", t.id_token.map_or("absent".into(), |s| format!("present fp={}", s.fingerprint())));
@@ -392,8 +398,42 @@ fn run_live() -> ExitCode {
     }
 }
 
+fn oauth_lock() -> Result<std::fs::File, ExitCode> {
+    persistence::lock_path().and_then(|path| persistence::lock(&path)).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    })
+}
+
+fn session_store<'a>(
+    backend: &'a dyn spike_01_credential_store::backend::CredentialBackend,
+    default_alias: &str,
+) -> Result<persistence::SessionStore<'a>, ExitCode> {
+    let alias = std::env::var("A_EYE_OAUTH_ACCOUNT_ID").unwrap_or_else(|_| default_alias.into());
+    persistence::SessionStore::new(backend, &alias).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::from(2)
+    })
+}
+
 /// Resolve the persisted host id, then run the plan-usage sign-in and print a PASS/FAIL table.
 fn run_live_plan_usage() -> ExitCode {
+    let _lock = match oauth_lock() { Ok(lock) => lock, Err(code) => return code };
+    let backend = spike_01_credential_store::backend::SecretServiceBackend::new(store::KEYRING_TIMEOUT);
+    let store = match session_store(&backend, "plan-usage") { Ok(store) => store, Err(code) => return code };
+    match store.resume(siwc::TOKEN_URL, None, Some(siwc::RESOURCE), token::RefreshEncoding::Form,
+        std::time::SystemTime::now()) {
+        Ok(Some(session)) => {
+            println!("Stored plan-usage session loaded/refreshed; no browser sign-in needed.");
+            let plan_usage_granted = siwc::has_plan_usage_scope(&session.tokens);
+            println!("access_token fp={}; expires_in={:?}s; plan_usage_scope={}",
+                session.tokens.access_token.fingerprint(), session.tokens.expires_in, plan_usage_granted);
+            println!("ID token signature remains UNVERIFIED; this run did not recheck sign-in claims.");
+            return ExitCode::from(exit_status(usize::from(!plan_usage_granted)));
+        }
+        Ok(None) => {}
+        Err(e) => { eprintln!("{e}"); return ExitCode::FAILURE; }
+    }
     let path = match siwc::host_id_path() {
         Ok(p) => p,
         Err(e) => {
@@ -413,7 +453,7 @@ fn run_live_plan_usage() -> ExitCode {
     println!("A-Eye will NOT open a browser. Open the URL below yourself; waiting up to 5 minutes on 127.0.0.1:{}.\n", siwc::REDIRECT_PORT);
 
     let cfg = siwc::PlanUsageConfig::production(host_id);
-    match siwc::run(&cfg, |u| println!("{u}\n")) {
+    match siwc::run_and_store(&cfg, &store, |u| println!("{u}\n")) {
         Ok(out) => print_plan_usage_result(&out),
         Err(e) => {
             eprintln!("live plan-usage flow failed: {e}");
@@ -473,7 +513,7 @@ fn print_plan_usage_result(out: &siwc::PlanUsageOutcome) -> ExitCode {
     println!("redirect used   : {}", out.redirect_uri);
     println!("\nchecks:");
     record::print_table(&checks);
-    println!("\ntokens were NOT stored and are discarded on exit; nothing above contains a token value.");
+    println!("\ntokens persisted and read back through part 01 Secret Service; nothing above contains a token value.");
     let failed = record::count(&checks, Status::Fail);
     println!("summary: {} PASS, {failed} FAIL, {} UNVERIFIED", record::count(&checks, Status::Pass), record::count(&checks, Status::Unverified));
     ExitCode::from(exit_status(failed))

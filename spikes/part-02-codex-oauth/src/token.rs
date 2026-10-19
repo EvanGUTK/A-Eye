@@ -2,12 +2,13 @@
 //!
 //! Form-encoded POST: grant_type=authorization_code, code, code_verifier,
 //! redirect_uri, client_id. Errors never contain the response body verbatim,
-//! only the RFC 6749 `error` / `error_description` fields.
+//! only structured error fields. Refresh failures allowlist error codes and omit
+//! descriptions because providers can echo refresh credentials in either field.
 
 use std::io::Read;
 use std::time::{Duration, SystemTime};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::secret::Secret;
 
@@ -21,7 +22,7 @@ pub struct ExchangeRequest<'a> {
     pub redirect_uri: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TokenSet {
     pub access_token: Secret,
     pub refresh_token: Option<Secret>,
@@ -34,8 +35,48 @@ pub struct TokenSet {
 
 impl TokenSet {
     pub fn expires_at(&self) -> Option<SystemTime> {
-        self.expires_in.map(|s| self.obtained_at + Duration::from_secs(s))
+        self.expires_in.and_then(|s| self.obtained_at.checked_add(Duration::from_secs(s)))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefreshEncoding {
+    /// Codex CLI's /oauth/token route (verified from OpenAI's source).
+    Json,
+    /// Documented open-source plan-usage route, with resource.
+    Form,
+}
+
+pub fn refresh(
+    client: &reqwest::blocking::Client,
+    token_url: &str,
+    client_id: &str,
+    refresh_token: &Secret,
+    encoding: RefreshEncoding,
+    resource: Option<&str>,
+) -> Result<TokenSet, TokenError> {
+    let mut fields = vec![
+        ("grant_type", "refresh_token"),
+        ("client_id", client_id),
+        ("refresh_token", refresh_token.expose()),
+    ];
+    if let Some(resource) = resource {
+        fields.push(("resource", resource));
+    }
+    let (content_type, body) = match encoding {
+        RefreshEncoding::Json => {
+            let fields: std::collections::BTreeMap<_, _> = fields.into_iter().collect();
+            let body = serde_json::to_string(&fields)
+                .map_err(|_| TokenError::Malformed("cannot encode refresh request".into()))?;
+            ("application/json", body)
+        }
+        RefreshEncoding::Form => {
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.extend_pairs(fields);
+            ("application/x-www-form-urlencoded", form.finish())
+        }
+    };
+    request_tokens(client, token_url, content_type, body, true)
 }
 
 #[derive(Debug)]
@@ -121,9 +162,19 @@ pub fn exchange_code_with_params(
     }
     let body = form.finish();
 
+    request_tokens(client, req.token_url, "application/x-www-form-urlencoded", body, false)
+}
+
+fn request_tokens(
+    client: &reqwest::blocking::Client,
+    token_url: &str,
+    content_type: &str,
+    body: String,
+    redact_errors: bool,
+) -> Result<TokenSet, TokenError> {
     let resp = client
-        .post(req.token_url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
+        .post(token_url)
+        .header("Content-Type", content_type)
         .header("Accept", "application/json")
         .body(body)
         .send()
@@ -131,16 +182,22 @@ pub fn exchange_code_with_params(
 
     let status = resp.status();
     let mut bytes = Vec::new();
-    resp.take(MAX_RESPONSE_BYTES)
+    resp.take(MAX_RESPONSE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| TokenError::Network(format!("reading response failed: {e}")))?;
 
+    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(TokenError::Malformed("response exceeds size limit".into()));
+    }
     if !status.is_success() {
         let parsed: Option<RawError> = serde_json::from_slice(&bytes).ok();
         return Err(TokenError::Rejected {
             status: status.as_u16(),
-            error: parsed.as_ref().and_then(|p| p.error.clone()),
-            description: parsed.and_then(|p| p.error_description),
+            error: parsed.as_ref().and_then(|p| p.error.clone()).filter(|e| !redact_errors || matches!(e.as_str(),
+                "invalid_grant" | "invalid_request" | "invalid_client" | "unauthorized_client"
+                | "unsupported_grant_type" | "invalid_scope" | "access_denied"
+                | "refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")),
+            description: if redact_errors { None } else { parsed.and_then(|p| p.error_description) },
         });
     }
 
@@ -154,6 +211,12 @@ pub fn parse_token_response(bytes: &[u8], now: SystemTime) -> Result<TokenSet, T
     })?;
     if raw.access_token.expose().is_empty() {
         return Err(TokenError::Malformed("empty access_token".into()));
+    }
+    if raw.refresh_token.as_ref().is_some_and(|s| s.expose().is_empty()) {
+        return Err(TokenError::Malformed("empty refresh_token".into()));
+    }
+    if raw.expires_in.is_some_and(|s| now.checked_add(Duration::from_secs(s)).is_none()) {
+        return Err(TokenError::Malformed("expires_in out of range".into()));
     }
     Ok(TokenSet {
         access_token: raw.access_token,

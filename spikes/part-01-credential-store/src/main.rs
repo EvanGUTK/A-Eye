@@ -9,9 +9,9 @@
 //! never printed (only lengths and "match: true/false"); every Secret Service call
 //! is bounded by a 15 s timeout; the encrypted file lives in a temp dir.
 
-mod backend;
-mod filestore;
 mod scan;
+
+use spike_01_credential_store::{backend, filestore};
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
