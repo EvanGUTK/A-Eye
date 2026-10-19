@@ -10,8 +10,8 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | Part | Spike | Status | Issues |
 |---|---|---|---|
 | 01 | Credential store (keyring + fallback) | merged (#17): Secret Service and encrypted-file fallback proven; default keyring on the test machine is unencrypted (SS-05 FAIL) | #3 #4 #5 #6 closed |
-| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified | #7 #8 closed; #9 #10 open |
-| 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01) | #11 #12 open |
+| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified. On branch `agents/sessions`, not merged: `--live-plan-usage` for OpenAI's documented open-source route, synthetic-mock tested; real binary reached the real token endpoint with a fake code (see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md)) | #7 #8 closed; #9 #10 open |
+| 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01, re-read 2026-10-18, unchanged); no live run is prepared, see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md) | #11 #12 open |
 | 04 | XDG ScreenCast + PipeWire frame | merged (#18): real frame captured via portal and saved as PNG on Hyprland; monitor id/scale (M1) and two-monitor different-scale (M2) unverified | #14 closed; #13 #15 open |
 | 05 | wlr-layer-shell orange border | paused (Linux-only overlay; see platform pivot below) | |
 | 06 | Ollama vision (local model) | todo | |
@@ -48,7 +48,8 @@ to avoid it. Confirmed working with `cargo check --target x86_64-pc-windows-msvc
 ## What is still unverified (parts 01-04)
 
 - Live OAuth against Codex (part 02) and Claude (part 03): needs interactive browser consent on a real
-  subscription. Part 03's live use should wait for Anthropic's approval or a switch to the permitted path
+  subscription. Codex is one command once a human is ready (`docs/planning/LIVE-AUTH-RUNBOOK.md`); the
+  parameters the real authorize endpoint accepts can only be checked in a browser (Cloudflare challenge). Part 03's live use should wait for Anthropic's approval or a switch to the permitted path
   (see the F01 finding in its capability record and PR #19).
 - Real Claude Agent SDK session turn and whether the SDK accepts a subscription token (part 03).
 - Selected-stream monitor id/scale and the two-monitor different-scale capture (part 04).

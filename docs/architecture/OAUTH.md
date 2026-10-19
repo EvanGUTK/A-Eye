@@ -99,6 +99,11 @@ for Claude ([ADR 014](../decisions/README.md)); this risk is accepted by the pro
 owner and is not resolved by the spike. Live use should wait for Anthropic's approval or
 a switch to the permitted path.
 
+Re-read 2026-10-18 at the same two pages: F01 still holds, and `legal-and-compliance` now also says
+"sign-in to a Claude account must complete through Anthropic's own flow". No Claude endpoint,
+client id or scope has been verified, and none will be obtained by extracting them from the Claude
+CLI (see the [live auth runbook](../planning/LIVE-AUTH-RUNBOOK.md)).
+
 Open decision: [AGENT-INTEGRATIONS.md](AGENT-INTEGRATIONS.md) currently says embedded
 Claude uses supported API authentication unless the publisher has explicit approval for
 another route, which conflicts with ADR 014 until that approval exists or one of the two
@@ -122,6 +127,33 @@ approval before shipping Claude OAuth is for the project owner to decide.
 | Token storage | Per the Codex docs (developers.openai.com/codex/auth) the CLI caches credentials in `~/.codex/auth.json` or the OS credential store, selected by `cli_auth_credentials_store` (`file`, `keyring`, `auto`, `ephemeral`). A-Eye stores its own tokens in the OS credential store (see below); sharing `auth.json` is **Unverified** |
 | Token lifetime | **Unverified** (spike 02 used synthetic values) |
 | App-server | Codex daemon started by A-Eye using stored tokens; connects via Unix socket (**Unverified**; no app-server turn was run) |
+
+#### Documented route for open-source apps: ChatGPT plan usage (preferred)
+
+Read 2026-10-18 at developers.openai.com/siwc/token-sharing-open-source. A-Eye is MIT-licensed
+open source, so this route applies and removes the need to reuse the Codex CLI's client id.
+Spike 02 implements the first registration as `--live-plan-usage`; it is tested against a
+synthetic mock only and has not been run live
+([runbook](../planning/LIVE-AUTH-RUNBOOK.md)).
+
+| Field | Value |
+|---|---|
+| Authorize endpoint | `https://auth.openai.com/api/accounts/authorize` (**Verified from docs** and the provider's OIDC discovery document; automated GET is blocked by a Cloudflare challenge, so acceptance of the parameters is **Unverified** live) |
+| Token endpoint | `https://auth.openai.com/api/accounts/oauth/token` (**Verified from docs** and discovery; a POST with a fake code returned HTTP 400 `invalid_grant` JSON, so it is reachable from a non-browser client) |
+| Client ID | First registration uses the fixed `dynamic_agent_client`; the callback returns the issued `oaiapp_...` id, which is then used for the exchange and reauthorization. No client secret or partner key. Each issued id is bound to the user and the selected workspace (**Verified from docs**) |
+| Host id | `ext_agent_host_id`, an opaque stable per-host value (JWK thumbprint URI recommended; `urn:uuid:` and `did:key` accepted; spike 02 uses `urn:uuid:`), persisted before the first sign-in; `agent_name_hint` is the app name (**Verified from docs**) |
+| Redirect URI | `http://127.0.0.1:1455/auth/callback` for first registration; later sign-ins may use another port with the same scheme, host and path; not `localhost` (**Verified from docs**) |
+| Scopes | `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`, with `resource=https://api.openai.com/v1` (**Verified from docs**). A valid ID token alone does not authorize plan usage; the granted scopes must include `chatgpt.tokens.use.direct` |
+| Other parameters | fresh `state`, `nonce`, PKCE S256; the same `redirect_uri` and `resource` on the form-encoded code exchange (**Verified from docs**) |
+| ID token | verify signature against the provider JWKS (`https://auth.openai.com/.well-known/jwks.json`, from discovery), `iss`, `aud` = issued client id, `exp`, `nonce`. Spike 02 checks every claim but not the signature (**Unverified**) |
+| Lifetimes | access token 1 hour (`expires_in: 3600`), refresh token 30 days, rotated on each refresh (**Verified from docs**; **Unverified** live) |
+| Refresh endpoint and request format | not documented on the pages read (**Unverified**) |
+| Codex app-server | token passed as the `ACCESS_TOKEN` environment variable with a custom `model_provider` override, `codex app-server --listen stdio://`; renewal means restarting the process and `thread/resume` (**Verified from docs**; no turn was run) |
+| Limits | Responses API needs `store: false`, `stream: true`; images are accepted when the model accepts them; hosted tools (file search, code interpreter, computer use, image generation) are unsupported (**Verified from docs**) |
+| Availability | described for open-source and local apps; a limited-trial/interest-form path exists for paid or hosted apps; eligibility of this app is **Unverified** |
+
+The Codex CLI client route below was re-checked against `openai/codex` at `70b3bb6` on
+2026-10-18: endpoints, redirect, scopes and extra parameters are unchanged.
 
 The Codex app-server (`codex app-server` in the CLI source; the `--app-server` spelling and the socket path below are **Unverified**) handles its own auth internally
 when tokens are present. A-Eye can either:
