@@ -29,7 +29,7 @@ Windows toolchain, using the UNC-path + `CARGO_TARGET_DIR` pattern from `spikes/
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$env:TEMP\aeye-target"
-cd \\wsl$\Ubuntu\home\usaas\projects\code\A-Eye-worktrees\voice\spikes\part-08-voice
+cd <your checkout>\spikes\part-08-voice   # e.g. \\wsl$\<distro>\home\<user>\...\spikes\part-08-voice
 cargo test
 cargo run --release            # optional: --tools-dir PATH, --runs N (default 5)
 ```
