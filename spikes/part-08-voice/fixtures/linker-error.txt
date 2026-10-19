@@ -1,0 +1,1 @@
+The build failed with a linker error in the main module.

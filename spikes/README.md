@@ -16,7 +16,7 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | 05 | wlr-layer-shell orange border | paused (Linux-only overlay; see platform pivot below) | |
 | 06 | Ollama vision (local model) | todo | |
 | 07 | evdev global hotkey | todo | |
-| 08 | Voice: whisper.cpp STT + piper TTS | todo | |
+| 08 | Voice: whisper.cpp STT + piper TTS | done on branch `agents/voice`, not merged (#27): on Windows, offline, 4 synthetic SAPI-speech fixtures transcribed with 0 word errors by whisper.cpp 1.9.5 (base.en wall p50 ~0.73-0.88 s per ~3.5 s clip, tiny.en ~0.40-0.48 s) and 5 strings synthesised by piper 1.2.0 (first audio ~0.28-0.39 s, WAV ready ~0.32-0.38 s; both include per-call model load); piper-to-whisper round trip passed 5/5 in 2 of 3 runs (1 word substituted in the other); **whisper base.en invented "you" on 2 s of silence in all 3 runs**; live mic/speaker, playback cancel, enforced network isolation, real human speech **unverified**; piper is archived and voice dataset licences need review | #27 open |
 | 09 | MCP stdio server (7 tools) | todo | |
 | 10 | Scope leases + epoch revocation | todo | |
 | 11 | Coordinate transforms + crop pipeline | todo | |

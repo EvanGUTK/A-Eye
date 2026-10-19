@@ -1,0 +1,1 @@
+Run cargo test and open the stack trace in the terminal.

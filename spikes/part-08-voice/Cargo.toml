@@ -1,0 +1,12 @@
+[package]
+name = "spike-08-voice"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A-Eye spike 08: local STT (whisper.cpp) and TTS (piper) on synthetic fixtures"
+
+# Standalone spike: not part of any workspace.
+[workspace]
+
+[dependencies]
+serde_json = "1"
