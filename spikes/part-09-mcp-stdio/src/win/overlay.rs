@@ -12,11 +12,13 @@
 
 use std::collections::HashMap;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, sleep, JoinHandle};
 use std::time::{Duration, Instant};
+
+use spike_10_scope_leases::{Authorization, Denial, LeaseBroker};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
@@ -100,14 +102,16 @@ pub struct OverlayManager {
     next_id: u64,
     entries: Entries,
     hotkey: Option<HotkeyThread>,
+    broker: Arc<LeaseBroker>,
 }
 
 impl OverlayManager {
-    pub fn new() -> Self {
+    pub fn new(broker: Arc<LeaseBroker>) -> Self {
         Self {
             next_id: 1,
             entries: Arc::new(Mutex::new(HashMap::new())),
             hotkey: None,
+            broker,
         }
     }
 
@@ -116,6 +120,7 @@ impl OverlayManager {
         monitor: &Monitor,
         colour: Rgb,
         lifetime: Duration,
+        authorization: Authorization,
     ) -> Result<OverlayStarted, ToolError> {
         self.ensure_hotkey()?;
         {
@@ -146,7 +151,11 @@ impl OverlayManager {
             h: monitor.height(),
         };
         let reason = Arc::new(AtomicU8::new(REASON_NONE));
-        let thread = spawn_overlay(region, colour, lifetime, Arc::clone(&reason))?;
+        let lease = OverlayLease {
+            broker: Arc::clone(&self.broker),
+            authorization,
+        };
+        let thread = spawn_overlay(region, colour, lifetime, Arc::clone(&reason), lease)?;
         let handle = format!("overlay-{}", self.next_id);
         self.next_id += 1;
         lock(&self.entries).insert(
@@ -194,11 +203,18 @@ impl OverlayManager {
         }
     }
 
-    fn ensure_hotkey(&mut self) -> Result<(), ToolError> {
-        if self.hotkey.as_ref().is_some_and(|h| !h.join.is_finished()) {
+    pub fn ensure_hotkey(&mut self) -> Result<(), ToolError> {
+        if self
+            .hotkey
+            .as_ref()
+            .is_some_and(|h| h.running.load(Ordering::SeqCst))
+        {
             return Ok(());
         }
-        self.hotkey = Some(start_hotkey(Arc::clone(&self.entries))?);
+        self.hotkey = Some(start_hotkey(
+            Arc::clone(&self.entries),
+            Arc::clone(&self.broker),
+        )?);
         Ok(())
     }
 }
@@ -211,23 +227,29 @@ struct Region {
     h: i32,
 }
 
+struct OverlayLease {
+    broker: Arc<LeaseBroker>,
+    authorization: Authorization,
+}
+
 fn spawn_overlay(
     region: Region,
     colour: Rgb,
     lifetime: Duration,
     reason: Arc<AtomicU8>,
+    lease: OverlayLease,
 ) -> Result<JoinHandle<()>, ToolError> {
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), ToolError>>();
     let reason_on_timeout = Arc::clone(&reason);
     let thread = thread::Builder::new()
         .name("aeye-overlay".into())
-        .spawn(move || overlay_thread(region, colour, lifetime, &reason, &ready_tx))
+        .spawn(move || overlay_thread(region, colour, lifetime, &reason, &ready_tx, &lease))
         .map_err(|e| ToolError::new(format!("could not start the overlay thread: {e}")))?;
     match ready_rx.recv_timeout(START_TIMEOUT) {
         Ok(Ok(())) => Ok(thread),
         Ok(Err(e)) => {
             let _ = thread.join();
-            Err(ToolError::new(format!("overlay window not created: {e}")))
+            Err(e)
         }
         Err(_) => {
             // The caller gets no handle for a late window, so nothing else can reach it: make it
@@ -244,13 +266,20 @@ fn overlay_thread(
     colour: Rgb,
     lifetime: Duration,
     reason: &AtomicU8,
-    ready: &mpsc::Sender<Result<(), String>>,
+    ready: &mpsc::Sender<Result<(), ToolError>>,
+    lease: &OverlayLease,
 ) {
     let deadline = Instant::now() + lifetime;
+    if let Err(denial) = lease.broker.verify(&lease.authorization) {
+        let _ = ready.send(Err(denial.into()));
+        return;
+    }
     let hwnd = match create_overlay(region, colour) {
         Ok(hwnd) => hwnd,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = ready.send(Err(ToolError::new(format!(
+                "overlay window not created: {e}"
+            ))));
             return;
         }
     };
@@ -259,6 +288,15 @@ fn overlay_thread(
     let mut destroyed = false;
     while pump_messages() {
         if !destroyed {
+            if let Err(denial) = lease.broker.verify(&lease.authorization) {
+                // Global revocation also covers windows created before the manager tracked them.
+                let reason_code = if denial == Denial::Expired {
+                    REASON_EXPIRED
+                } else {
+                    REASON_HOTKEY
+                };
+                set_reason(reason, reason_code);
+            }
             if Instant::now() >= deadline {
                 set_reason(reason, REASON_EXPIRED);
             }
@@ -464,6 +502,7 @@ fn paint_border(hwnd: HWND, r: Region, colour: Rgb) -> Result<(), String> {
 struct HotkeyThread {
     thread_id: u32,
     join: JoinHandle<()>,
+    running: Arc<AtomicBool>,
 }
 
 impl HotkeyThread {
@@ -474,18 +513,26 @@ impl HotkeyThread {
     }
 }
 
-fn start_hotkey(entries: Entries) -> Result<HotkeyThread, ToolError> {
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
+fn start_hotkey(entries: Entries, broker: Arc<LeaseBroker>) -> Result<HotkeyThread, ToolError> {
+    // A rendezvous prevents a late registration from retaining the chord after a startup timeout:
+    // sending readiness fails if the caller timed out and dropped its receiver.
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<u32, String>>(0);
+    let running = Arc::new(AtomicBool::new(true));
+    let thread_running = Arc::clone(&running);
     let join = thread::Builder::new()
         .name("aeye-hotkey".into())
-        .spawn(move || hotkey_thread(&entries, &ready_tx))
+        .spawn(move || hotkey_thread(&entries, &broker, &ready_tx, &thread_running))
         .map_err(|e| ToolError::new(format!("could not start the hotkey thread: {e}")))?;
     match ready_rx.recv_timeout(START_TIMEOUT) {
-        Ok(Ok(thread_id)) => Ok(HotkeyThread { thread_id, join }),
+        Ok(Ok(thread_id)) => Ok(HotkeyThread {
+            thread_id,
+            join,
+            running,
+        }),
         Ok(Err(e)) => {
             let _ = join.join();
             Err(ToolError::new(format!(
-                "local stop hotkey {HOTKEY_LABEL} is unavailable ({e}); not showing an overlay \
+                "local stop hotkey {HOTKEY_LABEL} is unavailable ({e}); not granting a lease \
                  without a local stop control (is another A-Eye process holding it?)"
             )))
         }
@@ -493,7 +540,12 @@ fn start_hotkey(entries: Entries) -> Result<HotkeyThread, ToolError> {
     }
 }
 
-fn hotkey_thread(entries: &Entries, ready: &mpsc::Sender<Result<u32, String>>) {
+fn hotkey_thread(
+    entries: &Entries,
+    broker: &LeaseBroker,
+    ready: &mpsc::SyncSender<Result<u32, String>>,
+    running: &AtomicBool,
+) {
     // SAFETY: a null window registers the hotkey for this thread's message queue.
     let registered =
         unsafe { RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_Q) };
@@ -508,16 +560,29 @@ fn hotkey_thread(entries: &Entries, ready: &mpsc::Sender<Result<u32, String>>) {
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
     }
     // SAFETY: plain query.
-    let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
+    if ready.send(Ok(unsafe { GetCurrentThreadId() })).is_err() {
+        // SAFETY: registration belongs to this thread; no lease was granted on timeout.
+        let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+        return;
+    }
 
     // SAFETY: standard blocking message loop; 0 is WM_QUIT and -1 an error, both end it.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
         if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-            eprintln!("[aeye-mcp] {HOTKEY_LABEL} pressed: removing all overlays");
+            let epoch = broker.revoke_all();
+            eprintln!("[aeye-mcp] {HOTKEY_LABEL} pressed: revoked all leases at epoch {epoch}; removing overlays");
             for entry in lock(entries).values() {
                 set_reason(&entry.reason, REASON_HOTKEY);
             }
         }
+    }
+    // Mark unavailable BEFORE revocation: a request observing the new epoch must not mistake an
+    // exiting thread for a working stop control and grant a lease after this final revoke.
+    running.store(false, Ordering::SeqCst);
+    // A lost message loop must not leave previously issued leases live without a local stop.
+    broker.revoke_all();
+    for entry in lock(entries).values() {
+        set_reason(&entry.reason, REASON_SHUTDOWN);
     }
     // SAFETY: matches the RegisterHotKey above.
     let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };

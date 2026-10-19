@@ -4,6 +4,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use spike_10_scope_leases::{Authorization, Denial};
+
 /// A failure the agent can read and act on; it becomes an `isError` tool result.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ToolError(pub String);
@@ -11,6 +13,12 @@ pub struct ToolError(pub String);
 impl ToolError {
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
+    }
+}
+
+impl From<Denial> for ToolError {
+    fn from(denial: Denial) -> Self {
+        Self::new(format!("{}: {denial}", denial.code()))
     }
 }
 
@@ -96,6 +104,8 @@ pub struct OverlayStopped {
 }
 
 pub trait Backend {
+    /// Install the native global stop before granting any lease, including capture-only ones.
+    fn ensure_local_stop(&mut self) -> Result<(), ToolError>;
     fn list_monitors(&mut self) -> Result<Vec<MonitorInfo>, ToolError>;
     fn capture_monitor(&mut self, monitor_id: &str) -> Result<Frame, ToolError>;
     fn cursor(&mut self) -> Result<Cursor, ToolError>;
@@ -104,6 +114,7 @@ pub trait Backend {
         monitor_id: &str,
         color: Rgb,
         lifetime: Duration,
+        authorization: Authorization,
     ) -> Result<OverlayStarted, ToolError>;
     fn stop_overlay(&mut self, handle: &str) -> Result<OverlayStopped, ToolError>;
     /// Called once when the client closes stdin: nothing may outlive the session.

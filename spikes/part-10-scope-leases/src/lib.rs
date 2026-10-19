@@ -5,8 +5,9 @@
 //! every outstanding lease at once. Dispatch code calls `LeaseBroker::check` before acting and
 //! `LeaseBroker::verify` before delivering the result.
 //!
-//! This is a spike: nothing here is wired into part 09 or any UI, and lease ids are guessable
-//! counters (see the crate README for what is and is not proven).
+//! Part 09 uses this primitive for MCP capture/overlay gates (Windows wiring unverified during
+//! Linux-only integration). No approval UI exists; its MCP grant path explicitly auto-approves in
+//! the spike. Lease ids remain guessable counters (see the crate README for verification limits).
 
 mod broker;
 mod clock;
