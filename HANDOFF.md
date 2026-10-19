@@ -41,13 +41,11 @@ detailed ones.
   - Vision (part-06) is wired as an explicit "Describe frame" button (issue #47 closed, PR #50) —
     captures a frame, sends it to a local Ollama vision model (default `qwen3-vl:2b`), shows the
     text description in the UI. Follow-up issue #51 opened: Windows owner-PID check on the loopback
-    Ollama port (currently any local process on that port could receive the frame). **Not yet
-    live-verified against a real Ollama**: this dev machine's only running Ollama instance is
-    inside WSL on `127.0.0.1:11434`; WSL/Windows share that loopback address (mirrored networking)
-    so Windows can't bind its own `ollama serve` there, but Windows also can't actually reach the
-    WSL-side instance (connect times out) — needs the user's input on how to proceed (stop WSL's
-    Ollama temporarily? pull `qwen3-vl:2b` there instead?) since other things may depend on the
-    WSL instance already running (see "Open decisions" below).
+    Ollama port (currently any local process on that port could receive the frame). **Live-verified
+    on Windows today** (PR #54): real screen capture → real native-Windows Ollama (`qwen3-vl:2b`) →
+    accurate text description of the actual desktop (taskbar, clock, wallpaper), end to end. The
+    new test bypasses apps/desktop's `Host` (still missing lease wiring, see next bullet) and talks
+    to the part-09 sidecar directly; it is not what the UI button does yet.
   - **apps/desktop's own MCP host was never updated for scope leases** (found via live
     verification): it still launched the sidecar with `--allow-capture`, which PR #49 made part-09
     reject outright, so the whole app would have failed to even connect. PR #53 removed the dead
@@ -64,22 +62,22 @@ detailed ones.
    SaaS/commercial work.
 2. **Voice model license** (issue #34, ADR019): confirm the exact license of archived piper +
    pick a specific MIT/CC0 voice model before voice ships as a real feature, not just a spike.
-3. **Ollama port conflict** (new today): this dev machine already runs an Ollama instance inside
-   WSL (serving other local-model workflows — `dmux-localcoder`, `ollama-gpu-guard.py`, etc.) bound
-   to `127.0.0.1:11434`. Because of WSL2 mirrored networking, that binding blocks a native Windows
-   `ollama serve` from using the same port, yet Windows can't actually reach the WSL instance
-   either. Live-verifying `apps/desktop`'s "Describe frame" feature needs a real Ollama reachable
-   from Windows with `qwen3-vl:2b` pulled — ask before stopping/reconfiguring the user's existing
-   WSL Ollama, since other running agents may depend on it.
+3. **Ollama port conflict, resolved pragmatically** (today): this dev machine runs an unrelated
+   Ollama instance inside WSL (`dmux-localcoder`, `ollama-gpu-guard.py`, etc.) bound to the default
+   `127.0.0.1:11434`; WSL2 mirrored networking blocks a native Windows `ollama serve` from using
+   that same port. Worked around by running native Windows Ollama on port 11435 instead (already
+   had `qwen3-vl:2b` pulled there) — no change to the user's WSL setup was needed. Not really an
+   open decision anymore, kept here as a note: apps/desktop itself still defaults to port 11434
+   (`AEYE_OLLAMA_PORT`), so a real user on a clean machine is unaffected; only this dev box needs
+   the non-default port when testing manually.
 
 ## Immediate next steps (engineering, no human decision needed first)
 
 See `docs/planning/ROADMAP.md`'s "Current status" section for the full ranked list. Short version:
 wire apps/desktop to part-10 scope leases for real (issue #52 — `aeye_request_watch` +
-`lease_id` plumbing, not just unblocking the sidecar), replace the lease auto-approve stub with a
-real GUI consent prompt, address issue #51 (Windows owner-PID check on the loopback Ollama port),
-then live-verify vision "Describe frame" once decision #3 above is resolved. Then: wire voice
-(part-08) into `apps/desktop`.
+`lease_id` plumbing, so the actual UI button works, not just the direct-sidecar test added today),
+replace the lease auto-approve stub with a real GUI consent prompt, and address issue #51 (Windows
+owner-PID check on the loopback Ollama port). Then: wire voice (part-08) into `apps/desktop`.
 
 ## Standing operating rules (from the user, this session)
 
