@@ -2,6 +2,16 @@
 
 Status: proposed. Supplements [AGENT-INTEGRATIONS.md](AGENT-INTEGRATIONS.md).
 
+Measured exception, 2026-10-18: [part 06](../../spikes/part-06-ollama-vision/README.md)
+proved standalone synthetic-image description through Windows Ollama 0.31.2 and
+`qwen3-vl:2b` (9/9 completed descriptions; warm p50 0.779–1.579 s). The initial
+unloaded-model request took 50.59 s and truncated; the final run needed a larger
+token cap because reasoning was emitted despite `think:false`. This does not
+implement the capture pipeline, change detector, evidence selection, TypeScript
+bridge, or coding-agent handoff described below. The measured native `/api/chat`
+path and model differ from the proposed examples. See the spike's results for
+exact identity, limitations and failed-attempt evidence.
+
 ## Purpose
 
 A-Eye uses a **local vision model** for its own internal processing — not as the

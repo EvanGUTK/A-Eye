@@ -1,0 +1,45 @@
+[
+    {
+        "id":  "dialog",
+        "file":  "01-dialog.png",
+        "width":  640,
+        "height":  360,
+        "sha256":  "c36e5b0ebebc61a9bab629893792ea738e86f3c40179eac02637be3771573628",
+        "ground_truth":  [
+                             "The image is labeled SYNTHETIC TEST UI.",
+                             "A centered dialog is titled Upload failed.",
+                             "The dialog says Network unavailable.",
+                             "The dialog contains Retry and Cancel buttons."
+                         ]
+    },
+    {
+        "id":  "form",
+        "file":  "02-form.png",
+        "width":  960,
+        "height":  640,
+        "sha256":  "af89797aa9f85830cf035b7f92c78bcefe5812dc2f4a980752ebd4dc36cabf0c",
+        "ground_truth":  [
+                             "The image is labeled SYNTHETIC TEST UI.",
+                             "A Create account signup form is visible.",
+                             "The Email field contains demo.invalid.",
+                             "Red validation text says Invalid email address.",
+                             "The Password field is masked with asterisks.",
+                             "The Create account button is gray and looks disabled."
+                         ]
+    },
+    {
+        "id":  "workspace",
+        "file":  "03-workspace.png",
+        "width":  1280,
+        "height":  800,
+        "sha256":  "feb066d46cf10c4d8e263f7cdfb4bc950e12992a17a5ae7b92a341e05a7f38a6",
+        "ground_truth":  [
+                             "The image is labeled SYNTHETIC TEST UI.",
+                             "An invented build workspace has sidebar entries Files, Builds, and Settings.",
+                             "A file list includes main.rs, ui.rs, and config.rs.",
+                             "A blue line chart is titled Build duration (seconds).",
+                             "A build log says error E0425: cannot find value total.",
+                             "The build status says Build failed."
+                         ]
+    }
+]
