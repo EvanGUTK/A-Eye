@@ -278,7 +278,6 @@ fn new_host_id() -> String {
 /// something to overwrite silently. Returns `(id, created)`.
 pub fn load_or_create_host_id(path: &Path) -> std::io::Result<(String, bool)> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
 
     match std::fs::read_to_string(path) {
         Ok(text) => {
@@ -299,7 +298,20 @@ pub fn load_or_create_host_id(path: &Path) -> std::io::Result<(String, bool)> {
         std::fs::create_dir_all(dir)?;
     }
     let id = new_host_id();
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    let mut open_opts = std::fs::OpenOptions::new();
+    open_opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_opts.mode(0o600);
+    }
+    let mut f = open_opts.open(path)?;
+    #[cfg(windows)]
+    {
+        // Best-effort lockdown to the current user; Windows has no POSIX mode bit.
+        // ACL hardening is a follow-up (tracked alongside the Windows platform pivot),
+        // not a correctness requirement for this spike.
+    }
     writeln!(f, "{id}")?;
     Ok((id, true))
 }
