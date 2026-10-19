@@ -4,6 +4,8 @@
 //! store synthetic tokens in the OS keyring, and print a capability record.
 //! `--live` (opt-in, never run by CI/agents): print the authorization URL for a
 //! human to open, using endpoints/client id from the environment.
+//! `--live-plan-usage` (opt-in, never run by CI/agents): the same for OpenAI's documented
+//! "Sign in with ChatGPT" route for open-source apps; no client id to supply.
 //!
 //! No real provider is contacted in the default run (AGENTS.md rule 12).
 //!
@@ -13,9 +15,12 @@
 mod callback;
 mod flow;
 mod mock;
+#[cfg(test)]
+mod mock_plan;
 mod pkce;
 mod record;
 mod secret;
+mod siwc;
 mod store;
 mod token;
 
@@ -36,6 +41,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None => run_mock(),
         Some("--live") => run_live(),
+        Some("--live-plan-usage") => run_live_plan_usage(),
         Some("--help") | Some("-h") => {
             println!(
                 "usage: a-eye-spike-02-codex-oauth [--live]\n\n\
@@ -43,7 +49,11 @@ fn main() -> ExitCode {
                  --live     opt-in: print an authorization URL for a human to open. Requires\n\
                  \x20          A_EYE_OAUTH_CLIENT_ID, A_EYE_OAUTH_AUTH_URL, A_EYE_OAUTH_TOKEN_URL;\n\
                  \x20          optional A_EYE_OAUTH_SCOPE, A_EYE_OAUTH_CALLBACK_PORT, A_EYE_OAUTH_CALLBACK_PATH.\n\
-                 \x20          Tokens are NOT stored in live mode."
+                 \x20          Tokens are NOT stored in live mode.\n\
+                 --live-plan-usage  opt-in: first registration + sign-in through OpenAI's documented\n\
+                 \x20          \"Sign in with ChatGPT\" route for open-source apps. Needs no environment\n\
+                 \x20          variables; listens on 127.0.0.1:1455 and prints a URL for a human to open.\n\
+                 \x20          Tokens are NOT stored; only lengths and fingerprints are printed."
             );
             ExitCode::SUCCESS
         }
@@ -226,7 +236,8 @@ fn unverified_checks() -> Vec<Check> {
     vec![
         Check::unverified(
             "live.codex_flow",
-            "not run: needs interactive browser consent on a real ChatGPT account; --live exists but was not executed",
+            "not run: needs interactive browser consent on a real ChatGPT account; --live-plan-usage (documented route) and --live exist but were not executed by an agent. \
+             Furthest verified without a human: the real binary printed the authorize URL, its loopback listener rejected bad state/path and accepted a fake code, and the real token endpoint answered it with invalid_grant",
         ),
         Check::unverified(
             "live.real_endpoints_and_client_id",
@@ -303,9 +314,12 @@ fn finish(mut checks: Vec<Check>, mock: Option<&MockProvider>) -> ExitCode {
     println!("      extra authorize params: id_token_add_organizations=true, codex_cli_simplified_flow=true, originator");
     println!("      auth-code exchange = form-encoded; ChatGPT refresh = JSON; Codex PKCE verifier = 64 random bytes (86 chars)");
     println!("      Codex tolerates a state suffix appended by ChatGPT (life-sciences onboarding); this spike requires exact state");
-    println!("    docs/architecture/OAUTH.md differs from the Codex source on endpoint paths (/oauth/authorize, /oauth/token), the fixed");
-    println!("    redirect 127.0.0.1:1455/auth/callback, concrete scopes and the 64-byte verifier; OAUTH.md was NOT updated by this spike.");
+    println!("    docs/architecture/OAUTH.md was corrected from these findings (PR #21); re-checked unchanged at openai/codex 70b3bb6 on 2026-10-18.");
     println!("  - Third-party use of the Codex public client_id by another app: no OpenAI statement found; UNVERIFIED");
+    println!("    OpenAI DOES document a route for open-source apps (developers.openai.com/siwc/token-sharing-open-source, read 2026-10-18):");
+    println!("      authorize = https://auth.openai.com/api/accounts/authorize with client_id=dynamic_agent_client; the issued client_id comes back on the");
+    println!("      callback; token = https://auth.openai.com/api/accounts/oauth/token (+ resource). Endpoints match the provider's OIDC discovery document.");
+    println!("      Implemented as --live-plan-usage and tested against a synthetic mock only; see docs/planning/LIVE-AUTH-RUNBOOK.md");
     println!("  - Codex app-server turn (text + image): out of scope, UNVERIFIED");
     println!("  - Encrypted-file fallback when Secret Service is absent: not implemented in this spike");
     println!();
@@ -376,6 +390,89 @@ fn run_live() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Resolve the persisted host id, then run the plan-usage sign-in and print a PASS/FAIL table.
+fn run_live_plan_usage() -> ExitCode {
+    let path = match siwc::host_id_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("cannot locate the host id file: {e} (set {})", siwc::HOST_ID_FILE_ENV);
+            return ExitCode::from(2);
+        }
+    };
+    let (host_id, created) = match siwc::load_or_create_host_id(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("host id file {}: {e}", path.display());
+            return ExitCode::from(2);
+        }
+    };
+    println!("host id         : {host_id} ({} {})", if created { "created" } else { "reused from" }, path.display());
+    println!("registering as  : {} (agent_name_hint), client_id=dynamic_agent_client", siwc::AGENT_NAME);
+    println!("A-Eye will NOT open a browser. Open the URL below yourself; waiting up to 5 minutes on 127.0.0.1:{}.\n", siwc::REDIRECT_PORT);
+
+    let cfg = siwc::PlanUsageConfig::production(host_id);
+    match siwc::run(&cfg, |u| println!("{u}\n")) {
+        Ok(out) => print_plan_usage_result(&out),
+        Err(e) => {
+            eprintln!("live plan-usage flow failed: {e}");
+            if matches!(e, siwc::PlanUsageError::Callback(callback::CallbackError::Bind(_))) {
+                eprintln!(
+                    "hint: port {} is busy (a running `codex login` also uses it). The first registration needs exactly this port.",
+                    siwc::REDIRECT_PORT
+                );
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_plan_usage_result(out: &siwc::PlanUsageOutcome) -> ExitCode {
+    let t = &out.tokens;
+    let mut checks = vec![
+        Check::pass(
+            "registration.issued_client_id",
+            format!("callback carried an issued client_id (prefix {}, len {})", &out.issued_client_id[..out.issued_client_id.len().min(7)], out.issued_client_id.len()),
+        ),
+        Check::pass(
+            "token.exchange",
+            format!(
+                "access_token len={} fp={}; refresh_token {}; expires_in={:?}s; token_type={}; scope=[{}]",
+                t.access_token.expose().len(),
+                t.access_token.fingerprint(),
+                t.refresh_token.as_ref().map_or("absent".into(), |s| format!("present fp={}", s.fingerprint())),
+                t.expires_in,
+                t.token_type.as_deref().unwrap_or("n/a"),
+                t.scope.as_deref().unwrap_or("n/a"),
+            ),
+        ),
+        Check::from_bool(
+            "token.plan_usage_scope",
+            out.plan_usage_granted,
+            format!("{} is in the granted scopes", siwc::PLAN_USAGE_SCOPE),
+            format!("{} is NOT in the granted scopes: sign-in works but plan usage is disabled", siwc::PLAN_USAGE_SCOPE),
+        ),
+    ];
+    checks.push(match &out.id_token {
+        Ok(info) => Check::pass(
+            "id_token.claims",
+            format!("iss, aud (= issued client_id), nonce and exp valid; alg={} kid={}; expires_at_unix={}", info.alg, info.kid.as_deref().unwrap_or("n/a"), info.expires_at_unix),
+        ),
+        Err(e) => Check::fail("id_token.claims", e.to_string()),
+    });
+    checks.push(Check::unverified(
+        "id_token.signature",
+        format!("not checked: needs the provider JWKS ({}/.well-known/jwks.json)", siwc::ISSUER),
+    ));
+
+    println!("redirect used   : {}", out.redirect_uri);
+    println!("\nchecks:");
+    record::print_table(&checks);
+    println!("\ntokens were NOT stored and are discarded on exit; nothing above contains a token value.");
+    let failed = record::count(&checks, Status::Fail);
+    println!("summary: {} PASS, {failed} FAIL, {} UNVERIFIED", record::count(&checks, Status::Pass), record::count(&checks, Status::Unverified));
+    ExitCode::from(exit_status(failed))
 }
 
 #[cfg(test)]

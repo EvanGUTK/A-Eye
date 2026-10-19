@@ -53,6 +53,13 @@ impl std::fmt::Display for CallbackError {
 
 impl std::error::Error for CallbackError {}
 
+/// What a valid callback carries. `client_id` is present only when the provider echoes it
+/// (the ChatGPT plan-usage registration returns the issued client_id here).
+pub struct Callback {
+    pub code: Secret,
+    pub client_id: Option<String>,
+}
+
 pub struct CallbackServer {
     listener: TcpListener,
     addr: SocketAddr,
@@ -87,6 +94,11 @@ impl CallbackServer {
     /// Block until one valid callback arrives or `timeout` elapses. Consumes the
     /// server, so the port is released on return.
     pub fn wait(self, expected_state: &str, timeout: Duration) -> Result<Secret, CallbackError> {
+        self.wait_callback(expected_state, timeout).map(|cb| cb.code)
+    }
+
+    /// Like [`wait`](Self::wait) but also returns the `client_id` query parameter.
+    pub fn wait_callback(self, expected_state: &str, timeout: Duration) -> Result<Callback, CallbackError> {
         let deadline = Instant::now() + timeout;
         loop {
             if Instant::now() >= deadline {
@@ -113,7 +125,7 @@ impl CallbackServer {
         mut stream: TcpStream,
         expected_state: &str,
         deadline: Instant,
-    ) -> Option<Result<Secret, CallbackError>> {
+    ) -> Option<Result<Callback, CallbackError>> {
         // Absolute per-connection deadline: a trickling client gets PER_CONNECTION
         // total time (never more than the overall deadline), not PER_CONNECTION per read.
         let conn_deadline = (Instant::now() + PER_CONNECTION_READ).min(deadline);
@@ -157,6 +169,7 @@ impl CallbackServer {
         let mut state = None;
         let mut error = None;
         let mut error_description = None;
+        let mut client_id = None;
         for (k, v) in url::form_urlencoded::parse(req.query.as_bytes()) {
             match k.as_ref() {
                 "code" if code.is_none() => code = Some(v.into_owned()),
@@ -165,6 +178,7 @@ impl CallbackServer {
                 "error_description" if error_description.is_none() => {
                     error_description = Some(v.into_owned())
                 }
+                "client_id" if client_id.is_none() => client_id = Some(v.into_owned()),
                 _ => {}
             }
         }
@@ -181,7 +195,7 @@ impl CallbackServer {
         match code {
             Some(c) if !c.is_empty() => {
                 respond(&mut stream, 200, "Sign-in complete. You can close this tab.");
-                Some(Ok(Secret::new(c)))
+                Some(Ok(Callback { code: Secret::new(c), client_id }))
             }
             _ => {
                 respond(&mut stream, 400, "Missing authorization code");
