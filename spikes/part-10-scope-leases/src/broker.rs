@@ -349,9 +349,10 @@ impl<C: Clock> LeaseBroker<C> {
         }
     }
 
-    // Critical sections below only do map and integer work and cannot panic (the two `expect`s
-    // run before any state is changed), so a poisoned lock still holds consistent state. Recovering
-    // matters for `revoke_all`: a stop must work even if some other thread died.
+    // Critical sections below only do map and integer work and cannot panic in practice (the two
+    // `expect`s guard 2^64 counters and fire before the state is left half-updated), so a poisoned
+    // lock still holds consistent state. Recovering matters for `revoke_all`: a stop must work
+    // even if some other thread died.
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -110,6 +110,10 @@ Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (s
   removing the scope check, ignoring `observed_epoch` in `grant`, and not bumping the epoch in
   `revoke_all` were each caught by failing tests. The threaded race tests also caught the
   `observed_epoch` mutation.
+- Review: **CodeRabbit did not run** (rate-limited, included reviews used up, paid usage not enabled). Instead: an
+  independent read-only review by a separate agent (found no path for a denied request to pass; its
+  findings are fixed or listed under "Not proven") and a line-by-line self-review of the diff. Neither is a
+  substitute for a human review.
 - Integration tests run 20 times in a row on WSL: 0 failures. `cargo clippy --all-targets -D
   warnings` and `cargo fmt --check` clean on both toolchains.
 
