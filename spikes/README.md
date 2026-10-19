@@ -62,3 +62,11 @@ to avoid it. Confirmed working with `cargo check --target x86_64-pc-windows-msvc
 - No shared crates until a spike graduates to the real app
 - Output is evidence: print what you proved, print what failed
 - Each spike has its own Cargo.toml (workspace member later)
+
+## First desktop integration
+
+[apps/desktop](../apps/desktop/README.md) is the runnable product location, following the intended
+repository layout. It reuses part 16's pinned Tauri packaging and bundles the existing part-09
+executable as a private stdio child. It is a monitor/overlay/single-frame preview milestone,
+not another spike or a completed visual-companion release. Build commands, tested evidence, and
+remaining limits live in its README. The historical spike evidence above is retained.

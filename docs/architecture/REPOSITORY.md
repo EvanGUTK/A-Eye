@@ -2,11 +2,11 @@
 
 ## What exists now
 
-The repository contains a researched planning foundation, native SVG design assets, a draft observation schema/example, contributor instructions, templates, and a documentation checker. There is no runnable application scaffold disguised as completed functionality.
+The repository contains a research/design foundation, standalone feasibility spikes, and the first Windows desktop integration in [apps/desktop](../../apps/desktop/README.md). The desktop hosts the part-09 capture/overlay MCP server over child stdio; it is a local monitor, border, and single-frame preview demo. Agent sessions, voice, scope leases, and continuous observation are not implemented in this app.
 
 ## Target hierarchy
 
-Indented paths below are a proposed future layout; empty source packages have deliberately not been created.
+`apps/desktop/` now exists with bundled static HTML/CSS/JavaScript in `src/` and the Tauri shell/stdin-stdout host in `src-tauri/`. It reuses the part-16 pins and packages the unchanged part-09 executable as `aeye-mcp.exe`. Static assets keep this first slice dependency-light and require no development web server; the proposed React/TypeScript feature structure below remains future work. Other source packages below have not been created.
 
 ```text
 A-Eye/
@@ -70,7 +70,7 @@ Start with fewer physical crates if separate packages add overhead. Preserve con
 
 ## Tooling plan
 
-Use a pnpm workspace for TypeScript and a Cargo workspace for native modules after the Phase 0 decision. Commit lockfiles once dependencies exist. Add documented commands for development, type checking, native checks, packaging, and fixture replay. Never document commands that do not yet run.
+Use a pnpm workspace for TypeScript and a Cargo workspace for native modules after the Phase 0 decision. The desktop commits its npm and Cargo lockfiles; standalone spikes retain their own lockfiles. Add documented commands for development, type checking, native checks, packaging, and fixture replay. Never document commands that do not yet run.
 
 Branch convention: `main` is the coherent baseline; short-lived `feat/`, `fix/`, `docs/`, and `spike/` branches hold focused changes. No permanent second development branch is necessary. Use PRs for implementation work and record spike conclusions even when prototypes are discarded.
 

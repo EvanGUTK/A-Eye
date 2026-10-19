@@ -1,0 +1,6 @@
+{
+  "identifier": "main-window",
+  "description": "Only the bundled main window can use the fixed desktop controls.",
+  "windows": ["main"],
+  "permissions": ["allow-desktop-action"]
+}

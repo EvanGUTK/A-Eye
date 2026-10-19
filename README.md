@@ -4,7 +4,7 @@
 
 <p align="center"><a href="docs/PRODUCT.md">Product vision</a> · <a href="docs/architecture/SYSTEM.md">Architecture</a> · <a href="docs/design/EXPERIENCE.md">Design direction</a> · <a href="docs/planning/ROADMAP.md">Roadmap</a> · <a href="docs/research/FINDINGS.md">Research</a></p>
 
-> **Status: research and architecture foundation.** No desktop application, capture service, voice engine, or agent adapter is implemented yet. Images below are design concepts, not screenshots of working software. Research reviewed October 15, 2026. MIT licensed.
+> **Status: first Windows desktop integration, plus research and feasibility spikes.** The [desktop demo](apps/desktop/README.md) hosts the local MCP sidecar for monitor selection, a timed orange border, and single-frame capture/preview. Scope leases, agent sessions, voice, and continuous observation are not implemented in the app. Images below remain design concepts. Research reviewed October 15, 2026. MIT licensed.
 
 ## “Look where I'm pointing.”
 
@@ -63,7 +63,7 @@ These are proposed decisions, subject to technical spikes. See [stack tradeoffs]
 3. Run the [first technical spikes](docs/planning/ROADMAP.md#phase-0--prove-the-interfaces).
 4. Build the smallest complete workflow: **point → speak → inspect → respond → stop**.
 
-There is no application install command yet. Check this documentation foundation with Python 3.10+:
+Build/run the native Windows demo using the [desktop instructions](apps/desktop/README.md). No web server is required. Check the documentation with Python 3.10+:
 
 ```bash
 git clone https://github.com/EvanGUTK/A-Eye.git
