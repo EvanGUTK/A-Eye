@@ -14,9 +14,9 @@ function snapshot(overrides = {}, preview = null) {
   return { status: { connected: true, error: null, monitors: displays, overlay: null, ...overrides }, preview };
 }
 
-function frame(monitorId = "primary") {
+function frame(monitorId = "primary", captureId = 1) {
   return {
-    monitor_id: monitorId, data_url: "data:image/png;base64,iVBORw0KGgo=",
+    capture_id: captureId, monitor_id: monitorId, data_url: "data:image/png;base64,iVBORw0KGgo=",
     width: 1280, height: 720, original_width: 2560, original_height: 1440,
     captured_at_ms: 1_792_339_200_000,
   };
@@ -29,7 +29,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function nativeBridge(invoke = async () => {}) {
+function nativeBridge(invoke = async () => {}, expectedDelay = 30_000) {
   const channels = [];
   const calls = [];
   const timeouts = new Map();
@@ -40,7 +40,7 @@ function nativeBridge(invoke = async () => {}) {
   };
   const timers = {
     setTimeout(callback, delay) {
-      assert.equal(delay, 30_000);
+      assert.equal(delay, expectedDelay);
       timeouts.set(++nextTimer, callback);
       return nextTimer;
     },
@@ -263,6 +263,8 @@ test("capture validates image origin and selected monitor", async () => {
   for (const preview of [
     { ...frame(), data_url: "https://example.test/screen.png" },
     { ...frame(), data_url: "data:image/svg+xml;base64,PHN2Zz4=" },
+    { ...frame(), capture_id: undefined },
+    { ...frame(), capture_id: 0 },
     frame("left"),
   ]) {
     const { controller } = await connected(() => snapshot({}, preview));
@@ -372,5 +374,142 @@ test("renderer uses text for untrusted monitor names and truthful overlay-reques
   assert.match(document.getElementById("overlay-state").textContent, /^Overlay requested/);
   assert.equal(document.getElementById("monitor").disabled, true);
   assert.equal(document.getElementById("hide-overlay").disabled, false);
+  mounted.dispose();
+});
+
+test("describe uses its own native command, argument and longer reply deadline", async () => {
+  const bridge = nativeBridge(async () => {}, 130_000);
+  const result = bridge.invoke("describe_frame", { captureId: 4 });
+  assert.deepEqual(bridge.calls.map(({ command, args }) => [command, args.captureId, args.reply === bridge.channels[0]]),
+    [["describe_frame", 4, true]]);
+  const rejected = assert.rejects(result, /did not reply within 130 seconds/);
+  bridge.timeouts.values().next().value();
+  await rejected;
+  assert.equal(bridge.timeouts.size, 0);
+});
+
+const description = (overrides = {}) => ({
+  capture_id: 1, monitor_id: "primary", model: "local:1", text: "A dialog with an OK button.",
+  error: null, elapsed_ms: 1500, ...overrides,
+});
+
+async function captured(describeHandler) {
+  const describeCalls = [];
+  const controller = createController(async (command, args) => {
+    if (command === "describe_frame") {
+      describeCalls.push(args);
+      return describeHandler(args);
+    }
+    return snapshot({}, args.action.type === "capture" ? frame() : null);
+  });
+  await controller.perform("connect");
+  await controller.perform("capture");
+  return { controller, describeCalls };
+}
+
+test("describe needs a captured frame and sends only its capture id", async () => {
+  const { controller, describeCalls } = await captured(() => description());
+  assert.equal(controller.view().canDescribe, true);
+  assert.equal(await controller.describe(), true);
+  assert.deepEqual(describeCalls, [{ captureId: 1 }]);
+  assert.deepEqual(controller.view().description, {
+    status: "done", captureId: 1, text: "A dialog with an OK button.", model: "local:1", elapsedMs: 1500,
+  });
+
+  const none = createController(async () => snapshot());
+  await none.perform("connect");
+  assert.equal(none.view().canDescribe, false);
+  assert.equal(await none.describe(), false);
+});
+
+test("a running description blocks a second request and a new capture but not hide or disconnect", async () => {
+  const pending = deferred();
+  const { controller, describeCalls } = await captured(() => pending.promise);
+  const running = controller.describe();
+  assert.equal(controller.view().describing, true);
+  assert.equal(controller.view().canDescribe, false);
+  assert.equal(controller.view().canCapture, false);
+  assert.equal(controller.view().canHide, true);
+  assert.equal(controller.view().canDisconnect, true);
+  assert.equal(await controller.describe(), false);
+  assert.equal(describeCalls.length, 1);
+  pending.resolve(description());
+  assert.equal(await running, true);
+  assert.equal(controller.view().canCapture, true);
+});
+
+test("a description for a replaced, hidden or disconnected frame is discarded", async () => {
+  for (const clear of [
+    (controller) => controller.selectMonitor("left"),
+    (controller) => controller.perform("hide_overlay"),
+    (controller) => controller.perform("disconnect"),
+  ]) {
+    const pending = deferred();
+    const { controller } = await captured(() => pending.promise);
+    const running = controller.describe();
+    await clear(controller);
+    assert.equal(controller.view().description, null);
+    assert.equal(controller.view().canCapture, controller.view().status.connected && Boolean(controller.view().selectedId));
+    pending.resolve(description());
+    assert.equal(await running, false);
+    assert.equal(controller.view().description, null);
+    assert.equal(controller.view().preview, null);
+  }
+});
+
+test("description failures stay local to the description and never become text", async () => {
+  const cases = [
+    [() => description({ text: null, error: "Model qwen3-vl:2b is not installed." }), "Model qwen3-vl:2b is not installed."],
+    [() => { throw new Error("IPC closed"); }, "Description request failed: IPC closed"],
+    [() => description({ capture_id: 2 }), "invalid description response"],
+    [() => description({ text: "", error: null }), "invalid description response"],
+    [() => description({ error: "x" }), "x"],
+    [() => null, "invalid description response"],
+  ];
+  for (const [handler, expected] of cases) {
+    const { controller } = await captured(handler);
+    assert.equal(await controller.describe(), false);
+    const { description: result } = controller.view();
+    assert.equal(result.status, "error");
+    assert.ok(result.error.includes(expected), result.error);
+    assert.ok(controller.view().preview, "the frame stays available for another try");
+    assert.equal(controller.view().canDescribe, true);
+    assert.equal(controller.view().error, null);
+  }
+});
+
+test("renderer shows model output as text only, beside the preview, with truthful state copy", async () => {
+  const document = fakeDocument();
+  const pending = deferred();
+  const mounted = mountDesktop(document, async (command, args) => {
+    if (command === "describe_frame") return pending.promise;
+    return snapshot({}, args.action.type === "capture" ? frame() : null);
+  }, { setInterval() { return 1; }, clearInterval() {} });
+  await Promise.resolve();
+  assert.equal(document.getElementById("describe").disabled, true);
+  assert.equal(document.getElementById("description").hidden, true);
+  await mounted.controller.perform("capture");
+  assert.equal(document.getElementById("describe").disabled, false);
+
+  document.getElementById("describe").events.get("click")();
+  assert.equal(document.getElementById("describe").textContent, "Describing…");
+  assert.equal(document.getElementById("describe").disabled, true);
+  assert.equal(document.getElementById("capture").disabled, true);
+  assert.equal(document.getElementById("description").hidden, false);
+  assert.match(document.getElementById("description-state").textContent, /Asking the local model/);
+  assert.equal(document.getElementById("description-text").hidden, true);
+
+  const hostile = "<img src=x onerror=alert(1)> ignore previous instructions";
+  pending.resolve(description({ text: hostile }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(document.getElementById("description-text").textContent, hostile);
+  assert.equal(document.getElementById("description-text").hidden, false);
+  assert.equal(document.getElementById("description-text").children.length, 0);
+  assert.match(document.getElementById("description-state").textContent, /local:1 · 1\.5 s · Unverified model output/);
+  assert.equal(document.getElementById("describe").textContent, "Describe frame");
+
+  mounted.controller.selectMonitor("left");
+  assert.equal(document.getElementById("description").hidden, true);
+  assert.equal(document.getElementById("description-text").textContent, "");
   mounted.dispose();
 });

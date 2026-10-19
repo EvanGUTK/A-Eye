@@ -20,7 +20,9 @@ short version, those are the detailed ones.
   `docs/planning/ROADMAP.md` → "Current status (2026-10-18)".
 - The first real runnable product exists: `apps/desktop` (PR #43) — a Tauri window hosting the
   part-09 MCP server as a sidecar, with live monitor list, overlay controls, and frame preview.
-  It is NOT yet wired to scope leases (part-10), vision (part-06), or voice (part-08).
+  It is NOT yet wired to scope leases (part-10) or voice (part-08). Vision (part-06) is wired as an
+  explicit "Describe frame" button (#47) but has only been tested with fixtures: it still needs a
+  Windows build and a live local-Ollama run.
 
 ## Open decisions that need the human, not an agent
 
@@ -35,7 +37,7 @@ short version, those are the detailed ones.
 
 See `docs/planning/ROADMAP.md`'s "Current status" section for the full ranked list. Short version:
 wire scope leases into part-09 (replace `--allow-capture`), persist Codex tokens via the part-01
-credential store (issue #10), wire vision into `apps/desktop`.
+credential store (issue #10), and live-verify the vision wire-up in `apps/desktop` on Windows.
 
 ## Standing operating rules (from the user, this session)
 

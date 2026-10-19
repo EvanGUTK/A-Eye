@@ -34,7 +34,7 @@ Beyond Phase 0: part-06 (Ollama vision), part-09 (MCP stdio server, 5 tools), pa
 2. Store Codex tokens via the part-01 credential store (issue #10) — token exchange works but nothing persists yet.
 3. Resolve the Claude OAuth release-gate decision (issue #22 item 3) before any Claude-dependent SaaS work.
 4. Confirm a shippable (MIT/CC0) voice model license (issue #34) before voice graduates from spike to feature.
-5. Wire vision (part-06) into `apps/desktop` so captured frames actually get described, not just previewed.
+5. ~~Wire vision (part-06) into `apps/desktop`~~ — **Implemented, not yet run end to end:** an explicit **Describe frame** action sends the captured frame to local Ollama ([README](../../apps/desktop/README.md#describe-a-frame-local-vision), #47). Tested here with synthetic fixtures only; the Windows build and live inference still need a human run.
 
 The Linux-first section immediately below (L0.x items) is **paused, not deleted** — resume it if/when Linux becomes a real target again.
 
