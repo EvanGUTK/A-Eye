@@ -193,6 +193,7 @@ mod tests {
         assert_eq!(r.roots_missing.len(), 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinks_are_not_followed() {
         let d = tmp("sym");
@@ -209,6 +210,7 @@ mod tests {
         fs::remove_dir_all(outside).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinked_root_is_scanned_and_canary_found() {
         let real = tmp("root-real");
@@ -228,6 +230,7 @@ mod tests {
         fs::remove_dir_all(holder).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn missing_or_dangling_root_makes_scan_incomplete() {
         let d = tmp("incomplete");
@@ -250,6 +253,7 @@ mod tests {
         fs::remove_dir_all(d).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlink_inside_a_symlinked_root_walk_is_still_not_followed() {
         let outside = tmp("inner-out");

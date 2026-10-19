@@ -31,10 +31,15 @@ pub struct Client {
 
 impl Client {
     pub fn spawn(path: &Path) -> Result<Self, String> {
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut command = Command::new(path);
-        // This local host has no model-facing input. Only the explicit Capture action calls
-        // capture; the child retains the spike's coarse process-lifetime opt-in gate.
-        command.arg("--allow-capture");
+        // Part 09 no longer accepts --allow-capture (removed in #49): capture/overlay now
+        // require a scope lease (aeye_request_watch) instead of a process-lifetime flag.
+        // TODO(#52): this host does not yet call aeye_request_watch or pass lease_id to
+        // aeye_start_overlay/aeye_capture_monitor, so those two calls will be denied
+        // (NO_ACTIVE_SCOPE) until that wiring lands. Spawning with no flag at least lets the
+        // sidecar start so list_monitors/status keep working instead of the child refusing to
+        // launch outright.
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

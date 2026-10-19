@@ -1,6 +1,7 @@
 //! Durable, versioned OAuth sessions over part 01's credential backend.
 
 use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -206,6 +207,7 @@ fn validate(session: &Session) -> Result<(), SessionError> {
 pub fn lock_path() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()))
         .ok_or("HOME is not set")?;
     Ok(PathBuf::from(home).join(".config/a-eye/codex-oauth.lock"))
 }
@@ -215,17 +217,32 @@ pub fn lock_path() -> Result<PathBuf, String> {
 /// Rust 1.89 is required for the standard library's file-lock API.
 pub fn lock(path: &Path) -> Result<File, String> {
     let parent = path.parent().ok_or("lock path has no parent")?;
+    #[cfg(unix)]
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(parent)
         .map_err(|_| "cannot create OAuth lock directory")?;
+    #[cfg(not(unix))]
+    fs::DirBuilder::new()
+        .recursive(true)
+        .create(parent)
+        .map_err(|_| "cannot create OAuth lock directory")?;
+    #[cfg(unix)]
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
+        .open(path)
+        .map_err(|_| "cannot open OAuth lock file")?;
+    #[cfg(not(unix))]
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
         .open(path)
         .map_err(|_| "cannot open OAuth lock file")?;
     file.try_lock().map_err(

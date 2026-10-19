@@ -58,10 +58,12 @@ or filesystem plugin permissions; its sole command accepts a closed set of deskt
 
 ## Controls and limits
 
-- The child is started with `--allow-capture`. This is part 09's coarse process-lifetime gate,
-  not a scope lease. Only the explicit **Capture one frame** action calls the capture tool;
-  polling and borders do not capture pixels. Each image covers the whole selected display,
-  downscaled to at most 1568 pixels on its longest side, with no cursor drawn.
+- The child is started with no process-lifetime capture flag. Part 09's capture/overlay tools
+  now require a scope lease (`aeye_request_watch`); **this host does not yet request or pass
+  one** (issue #52), so Capture and Show overlay are currently denied by the sidecar
+  (`NO_ACTIVE_SCOPE`) until that wiring lands. Monitor listing and status still work. Each image
+  covers the whole selected display, downscaled to at most 1568 pixels on its longest side, with
+  no cursor drawn.
 - Captures remain in memory in the app and are never deliberately saved. A frame is sent
   nowhere unless you click **Describe frame**, and then only to a model on this computer (below).
   Disconnect, reconnect, display changes, another capture, or Hide clear the preview and the
@@ -131,8 +133,9 @@ Design decisions:
   `src-tauri/src/vision.rs` behind a `Describer` trait. Failures (server down, model missing,
   no vision capability) show an actionable message in the description panel.
 - **Scope policy unchanged.** Describing does not capture. It acts on a frame already taken by an
-  explicit **Capture one frame** under the existing coarse `--allow-capture` gate; part-10 scope
-  leases are still not wired in. Describing a frame is not an approval for anything.
+  explicit **Capture one frame** action; that action itself is currently blocked pending the
+  scope-lease wiring described above (issue #52). Describing a frame is not an approval for
+  anything.
 
 ## Local verification
 
