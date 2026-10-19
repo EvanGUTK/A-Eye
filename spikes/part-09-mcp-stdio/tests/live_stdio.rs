@@ -489,7 +489,11 @@ fn live_session() {
         );
         sleep(SETTLE);
         let shot = client.capture(&id, FULL_RES);
-        let probes = (border_probe(&shot), shot.px(w - 1, h - 1));
+        // Probe the captured frame's own corner: its size is asserted below, not assumed here.
+        let probes = (
+            border_probe(&shot),
+            shot.px(shot.width - 1, shot.height - 1),
+        );
         r.check(
             &format!(
                 "overlay on monitor {id} ({w}x{h} at {}%)",
