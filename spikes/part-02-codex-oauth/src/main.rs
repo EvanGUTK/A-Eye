@@ -241,7 +241,7 @@ fn unverified_checks() -> Vec<Check> {
         ),
         Check::unverified(
             "live.real_endpoints_and_client_id",
-            "no request was sent to auth.openai.com. Endpoints/redirect/scope below are from openai/codex source \
+            "the default run sends nothing to auth.openai.com (a separate manual run on 2026-10-18 sent one token POST with a fake code -> invalid_grant, and no authorize request). Endpoints/redirect/scope below are from openai/codex source \
              (see 'what failed or is unknown'); the public client_id is deliberately not hardcoded here",
         ),
         Check::unverified(
@@ -301,7 +301,7 @@ fn finish(mut checks: Vec<Check>, mock: Option<&MockProvider>) -> ExitCode {
     println!();
     println!("what failed or is unknown:");
     println!("  - Live Codex/ChatGPT OAuth flow: UNVERIFIED (not run; requires interactive consent)");
-    println!("  - Real auth.openai.com behavior: UNVERIFIED (no request sent). Documented vs. unverified:");
+    println!("  - Real auth.openai.com behavior: UNVERIFIED (default run sends nothing; one manual fake-code token POST on 2026-10-18 -> invalid_grant). Documented vs. unverified:");
     println!("    DOCUMENTED (https://developers.openai.com/codex/auth, now learn.chatgpt.com/docs/auth): browser sign-in with");
     println!("      a localhost callback, default port 1455; credentials cached in ~/.codex/auth.json or the OS store");
     println!("      (cli_auth_credentials_store = file|keyring|auto|ephemeral); device-code login exists; tokens auto-refresh.");
@@ -433,7 +433,11 @@ fn print_plan_usage_result(out: &siwc::PlanUsageOutcome) -> ExitCode {
     let mut checks = vec![
         Check::pass(
             "registration.issued_client_id",
-            format!("callback carried an issued client_id (prefix {}, len {})", &out.issued_client_id[..out.issued_client_id.len().min(7)], out.issued_client_id.len()),
+            format!(
+                "callback carried an issued client_id (prefix {}, len {})",
+                out.issued_client_id.chars().take(7).collect::<String>(),
+                out.issued_client_id.len()
+            ),
         ),
         Check::pass(
             "token.exchange",
