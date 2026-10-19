@@ -1,0 +1,12 @@
+[package]
+name = "spike-10-scope-leases"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A-Eye spike 10: time-bounded, scope-bounded capture/overlay leases with epoch revocation"
+
+# Standalone spike: not part of any workspace.
+[workspace]
+
+# No dependencies on purpose: the primitive is std-only, so it builds and tests the same on
+# Windows and WSL and adds nothing to the supply chain.
