@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>A-Eye · Local display inspection</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header class="heading">
+      <div>
+        <p class="eyebrow">A-Eye</p>
+        <h1>Local display inspection</h1>
+      </div>
+      <span class="milestone">Desktop demo</span>
+    </header>
+
+    <section class="connection" aria-labelledby="connection-title">
+      <div class="connection-copy">
+        <h2 id="connection-title">MCP sidecar</h2>
+        <p id="connection-state" class="connection-state" role="status">Not connected</p>
+      </div>
+      <div class="button-row">
+        <button id="connect" type="button">Connect</button>
+        <button id="disconnect" type="button" disabled>Disconnect</button>
+      </div>
+    </section>
+
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section class="display-controls" aria-labelledby="display-title">
+      <div class="section-heading">
+        <h2 id="display-title">Display</h2>
+        <button id="refresh-monitors" class="quiet" type="button" disabled>Refresh displays</button>
+      </div>
+      <label for="monitor">Selected display</label>
+      <select id="monitor" aria-describedby="monitor-details selection-message" disabled>
+        <option value="">Connect to list displays</option>
+      </select>
+      <p id="monitor-details" class="detail">No display selected.</p>
+      <p id="selection-message" class="detail" role="status"></p>
+      <p class="scope">Whole selected display · local preview only</p>
+
+      <div class="button-row capture-controls">
+        <button id="show-overlay" type="button" disabled>Show orange overlay</button>
+        <button id="hide-overlay" type="button" disabled>Hide overlay</button>
+        <button id="capture" class="capture" type="button" disabled>Capture one frame</button>
+      </div>
+      <p id="overlay-state" class="detail" role="status">No overlay requested.</p>
+      <p class="stop-hint"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Q</kbd> closes the border locally.</p>
+      <p class="detail">Hide the overlay before changing displays. The border is an independent visual demo; it does not start capture. It may already be closed by the shortcut.</p>
+    </section>
+
+    <section class="preview-section" aria-labelledby="preview-title">
+      <div class="section-heading">
+        <h2 id="preview-title">Last local frame</h2>
+        <span class="detail">In memory only</span>
+      </div>
+      <div id="preview" class="preview">
+        <p class="placeholder">Capture one frame to inspect this display.</p>
+      </div>
+      <p id="preview-state" class="detail" role="status">No frame captured.</p>
+      <p id="preview-details" class="detail"></p>
+    </section>
+
+    <footer>
+      <p>Single frames only. No continuous observation, saving, or provider transmission.</p>
+      <p>Scope leases and coding-agent integration are not implemented in this demo.</p>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

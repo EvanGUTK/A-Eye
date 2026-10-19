@@ -33,6 +33,11 @@ Deliver short, reproducible spikes rather than a large scaffold.
 
 ## Phase 1 — Visual companion
 
+The first integration slice is [apps/desktop](../../apps/desktop/README.md): a native Windows
+Tauri host for the existing stdio MCP server, monitor selection, timed border controls, and
+one-frame local preview. This does not complete the Phase 1 exit demo: scope leases, agent
+delivery, cursor crops, and the observation envelope are still absent from the app.
+
 Build scope policy, display enumeration, cursor anchor, crop preview, orange border, stop control, and a basic MCP tool server. Add the observation envelope, explicit errors, and image-size bounds. Test with both target CLI hosts when available; state any host that remains unverified.
 
 **Exit demo:** in a synthetic app, point at a clipped menu, request inspection, get a relevant answer, and stop. No out-of-scope pixels reach the bridge; stop works with the host disconnected.

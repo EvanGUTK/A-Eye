@@ -26,7 +26,7 @@ This is a desktop-first stack. A web UI framework does not require a hosted webs
 | Distribution | Windows installer, signed artifacts/update manifest | Normal desktop lifecycle | Signing cost, clean-machine tests, rollback |
 | CI | GitHub Actions; Linux docs checks now, Windows app jobs later | Repeatable validation | Hosted runners do not replace interactive hardware tests |
 
-No versions are invented here. Phase 0 selects and locks exact dependency versions with a clean-machine reproduction. The repository currently contains documentation and draft contracts, not these dependencies.
+The first [desktop integration](../../apps/desktop/README.md) now pins Tauri and packages the existing Rust MCP server over stdio, with bundled static JavaScript controls. Its lockfiles and README record tested versions. The wider React/TypeScript, provider, storage, voice, and policy stack above remains proposed; clean-machine reproduction is still a release gate.
 
 ## Why Tauri, and when to change the decision
 

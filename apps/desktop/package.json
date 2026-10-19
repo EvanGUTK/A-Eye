@@ -1,0 +1,9 @@
+{
+  "name": "aeye-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A-Eye desktop: bundled local controls for the MCP capture sidecar",
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3"
+  }
+}

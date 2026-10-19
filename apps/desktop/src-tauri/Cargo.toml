@@ -1,0 +1,27 @@
+[package]
+name = "aeye-desktop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "A-Eye Windows desktop host for the local MCP capture sidecar"
+default-run = "aeye-desktop"
+
+[workspace]
+
+[dependencies]
+base64 = "=0.22.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+tauri = { version = "=2.12.4", features = [] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
