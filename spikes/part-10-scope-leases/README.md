@@ -36,7 +36,7 @@ No dependencies. Works on WSL cargo and on native Windows cargo.
 
 ```
 cd spikes/part-10-scope-leases
-cargo test                 # 20 unit tests (manual clock) + 7 threaded/real-clock tests (~1 s)
+cargo test                 # 23 unit tests (manual clock) + 7 threaded/real-clock tests (~1 s)
 cargo run                  # PASS/FAIL record against the real clock; exits non-zero on failure
 ```
 
@@ -71,6 +71,11 @@ MCP tools. That wiring does not exist.
   also expired, because that is the "do not retry" answer.
 - **Individual revoke removes the record** (the id then reads `NO_ACTIVE_SCOPE`); ids are a
   counter and are never reused, so a revoked id cannot come back.
+- **Time never goes backwards inside the broker.** Clock readings are clamped to the latest one seen,
+  so a clock that steps back cannot bring an expired lease back to life. `Clock::now` runs under the
+  broker's lock and must not call back into it.
+- **Ids carry a per-process broker id**, so an id or `Authorization` from another broker instance is
+  refused. This stops mix-ups, not guessing.
 - **Dead records are pruned at the next `grant`**, not by a background thread, so memory is bounded
   (64 active leases) without one. After pruning, a stale lease reads `NO_ACTIVE_SCOPE` rather than
   `STALE_EPOCH`; both are denials.
@@ -83,13 +88,14 @@ MCP tools. That wiring does not exist.
 
 Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (same results):
 
-- 20 unit tests on a manual clock: expiry at exactly the deadline (4.999 s allowed, 5.000 s denied),
+- 23 unit tests on a manual clock: expiry at exactly the deadline (4.999 s allowed, 5.000 s denied),
   per-lease expiry, `revoke_all` killing unexpired leases and in-flight `Authorization`s, epoch
   advancing by one per stop, approval refused after a stop (and for a future epoch), monitor A lease
   refused for B and for near-miss ids (`hm-A`, trailing space, empty, NUL), action not granted,
   overlapping leases independent, revoked ids never reissued, request validation, the 64-lease cap
-  and slot reuse after expiry, a clock overflow refused, `revoke_all` working after a panicked thread
-  poisoned the lock.
+  and slot reuse after expiry, a clock overflow refused, a clock that steps backwards unable to revive
+  an expired lease, one broker's ids and `Authorization`s rejected by another, a stale lease reading
+  `NO_ACTIVE_SCOPE` once pruned, `revoke_all` working after a panicked thread poisoned the lock.
 - 7 integration tests with real threads: 300 iterations x 8 threads of grants racing `revoke_all`
   (no grant that began after the stop returned succeeded; every lease granted before it was dead
   afterwards; epoch moved by exactly one); 200 iterations x 6 threads of `check` racing a stop; 32
@@ -114,9 +120,15 @@ Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (s
 - **Lease ids are guessable counters and not bound to a client or session.** Anyone who can submit a
   `LeaseId` to the broker can use that lease. A real design needs an unguessable token bound to the
   session it was granted for.
-- **In-flight work is dropped at delivery, not interrupted.** `verify` stops a stale frame from
-  being returned; it cannot abort a capture already running, and nothing downstream of delivery
-  honours the epoch yet.
+- **In-flight work is dropped at delivery, not interrupted, and the last gap is open.** `verify`
+  stops a stale frame from being returned; it cannot abort a capture already running. It releases
+  the lock before the caller sends the frame, so a stop landing between `verify` returning and the
+  frame leaving the process is not caught (a `deliver_if_live` that sends under the lock would
+  close it, at the cost of holding the lock during a send). Nothing downstream honours the epoch yet.
+- **Nothing restricts who may call `grant`.** `grant`, `revoke_all` and `check` are all methods on
+  one type, and `observed_epoch` can be read from `epoch()`: it guards against stale prompts, not
+  against forgery. Any code holding the broker can mint a lease. Real use needs a separate granter
+  capability that only the native approval path holds.
 - **Suspend/resume.** TTL is measured with `std::time::Instant`. Whether time asleep counts differs
   by OS (Linux `CLOCK_MONOTONIC` does not include suspend); not tested on either.
 - **Scope is whole monitors only**, matched by id string. Region or focused-window scopes, and
@@ -126,6 +138,10 @@ Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (s
 - **Performance under load.** One mutex, not benchmarked beyond the single-thread `revoke_all` time
   printed by `cargo run` (about 160-200 ns).
 - Race tests exercise the window many times; they cannot prove it has no race. The linearizability
-  argument rests on the single lock and code review, not a model checker.
+  argument rests on the single lock and code review, not a model checker. The tests assert
+  invariants, not that the interleaving was mixed (that count is printed, not asserted), and in the
+  `check`-vs-stop test nearly all checks begin after the stop, so it is a weak probe; a slow or
+  single-core machine could pass them with no real overlap. `cargo run` can report FAIL on a very
+  loaded machine if the first check takes over 300 ms.
 - The two `expect`s guard the 2^64 lease-id and epoch counters. They are unreachable in practice and
   untested.

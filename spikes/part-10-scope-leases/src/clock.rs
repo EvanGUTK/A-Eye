@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub trait Clock: Send + Sync {
-    /// Time since an arbitrary fixed origin. Must never go backwards.
+    /// Time since an arbitrary fixed origin. Should never go backwards (the broker clamps it if
+    /// it does). Called while the broker's lock is held, so it must not call back into the broker.
     fn now(&self) -> Duration;
 }
 

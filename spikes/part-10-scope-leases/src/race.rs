@@ -21,7 +21,7 @@ use crate::{Action, Actions, Denial, GrantError, Lease, LeaseBroker, LeaseReques
 
 /// Grants each thread attempts. Keep `grant_threads * GRANTS_PER_THREAD` under
 /// `MAX_OUTSTANDING_LEASES` so the capacity limit cannot be what refuses a grant.
-const GRANTS_PER_THREAD: usize = 4;
+pub const GRANTS_PER_THREAD: usize = 4;
 const TRIAL_TTL: Duration = Duration::from_secs(60);
 const TRIAL_MONITOR: &str = "hm-synthetic-a";
 

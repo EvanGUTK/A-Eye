@@ -35,7 +35,7 @@ fn a_grant_racing_a_stop_never_yields_a_live_lease() {
     assert!(report.violations.is_empty(), "{:#?}", report.violations);
     assert_eq!(
         report.grants_ok + report.grants_refused_stale,
-        ITERATIONS * GRANT_THREADS * 4,
+        ITERATIONS * GRANT_THREADS * race::GRANTS_PER_THREAD,
         "every attempt is either granted-then-revoked or refused as stale"
     );
     eprintln!(
@@ -103,7 +103,7 @@ fn a_check_that_begins_after_a_stop_returned_is_always_denied() {
 }
 
 #[test]
-fn overlapping_requests_all_get_distinct_independent_leases() {
+fn overlapping_requests_all_get_distinct_valid_leases() {
     const THREADS: usize = 8;
     const PER_THREAD: usize = 4;
     let broker = Arc::new(LeaseBroker::new());
@@ -197,7 +197,7 @@ fn concurrent_stops_each_advance_the_epoch_exactly_once() {
 }
 
 #[test]
-fn an_approval_prompt_opened_before_a_stop_is_refused_even_across_threads() {
+fn an_approval_prompt_opened_before_a_stop_on_another_thread_is_refused() {
     let broker = Arc::new(LeaseBroker::new());
     let prompt = request(&broker, Duration::from_secs(60));
 
@@ -222,14 +222,12 @@ fn a_lease_expires_on_the_real_clock() {
     let lease = broker.grant(request(&broker, TTL)).expect("grant");
     let target = Scope::monitor("hm-a");
 
-    assert!(
-        broker.check(lease.id, Action::Capture, &target).is_ok(),
-        "usable straight after the grant"
-    );
+    let straight_after = broker.check(lease.id, Action::Capture, &target);
     assert!(
         granted_at.elapsed() < TTL,
         "test thread stalled past the ttl; rerun"
     );
+    assert!(straight_after.is_ok(), "usable straight after the grant");
 
     thread::sleep(TTL + Duration::from_millis(50));
     assert_eq!(

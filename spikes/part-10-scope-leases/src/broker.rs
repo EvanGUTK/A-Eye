@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -39,15 +40,23 @@ impl fmt::Display for Epoch {
     }
 }
 
-/// Opaque reference to a lease. Ids are never reused within a broker.
+/// Opaque reference to a lease. Ids are never reused within a broker, and carry the id of the
+/// broker that issued them so one broker's ids (and `Authorization`s) mean nothing to another.
+/// That guards against mixing up instances, not against guessing: both parts are counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LeaseId(u64);
+pub struct LeaseId {
+    broker: u64,
+    serial: u64,
+}
 
 impl fmt::Display for LeaseId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "lease-{}", self.0)
+        write!(f, "lease-{}.{}", self.broker, self.serial)
     }
 }
+
+/// Source of per-process broker ids.
+static NEXT_BROKER_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Instance-scoped monitor identity (part 09 uses `hm-<hex HMONITOR>`). Opaque to the broker.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -268,8 +277,12 @@ struct Record {
 
 #[derive(Debug)]
 struct State {
+    broker_id: u64,
     epoch: Epoch,
     next_id: u64,
+    /// Latest time the clock has reported. Time seen by the broker never goes backwards, so a
+    /// clock that steps back cannot make a lease live longer than its ttl.
+    latest_now: Duration,
     leases: HashMap<LeaseId, Record>,
 }
 
@@ -288,6 +301,12 @@ impl State {
             return Err(Denial::Expired);
         }
         Ok(record)
+    }
+
+    /// Reads the clock under the lock, clamped to never move backwards.
+    fn now(&mut self, clock: &impl Clock) -> Duration {
+        self.latest_now = self.latest_now.max(clock.now());
+        self.latest_now
     }
 
     fn is_active(&self, record: &Record, now: Duration) -> bool {
@@ -321,8 +340,10 @@ impl<C: Clock> LeaseBroker<C> {
         Self {
             clock,
             state: Mutex::new(State {
+                broker_id: NEXT_BROKER_ID.fetch_add(1, Ordering::Relaxed),
                 epoch: Epoch(0),
                 next_id: 0,
+                latest_now: Duration::ZERO,
                 leases: HashMap::new(),
             }),
         }
@@ -366,7 +387,7 @@ impl<C: Clock> LeaseBroker<C> {
                 current: state.epoch,
             });
         }
-        let now = self.clock.now();
+        let now = state.now(&self.clock);
         let expires_at = now
             .checked_add(request.ttl)
             .ok_or(GrantError::ClockOverflow)?;
@@ -382,7 +403,10 @@ impl<C: Clock> LeaseBroker<C> {
             });
         }
 
-        let id = LeaseId(state.next_id);
+        let id = LeaseId {
+            broker: state.broker_id,
+            serial: state.next_id,
+        };
         state.next_id = state
             .next_id
             .checked_add(1)
@@ -412,8 +436,9 @@ impl<C: Clock> LeaseBroker<C> {
         action: Action,
         target: &Scope,
     ) -> Result<Authorization, Denial> {
-        let state = self.lock();
-        let record = state.live(id, self.clock.now())?;
+        let mut state = self.lock();
+        let now = state.now(&self.clock);
+        let record = state.live(id, now)?;
         if !record.scope.covers(target) {
             return Err(Denial::ScopeMismatch);
         }
@@ -429,11 +454,18 @@ impl<C: Clock> LeaseBroker<C> {
     /// Re-check an `Authorization` just before its result (a captured frame) leaves the core. Work
     /// that started under a lease must not be delivered after the lease died: a stop, or the
     /// deadline, may have passed while the capture was in flight.
+    ///
+    /// This closes the gap up to the moment of the call, not after it: a stop that lands between
+    /// `verify` returning and the frame actually leaving the process is not caught.
     pub fn verify(&self, authorization: &Authorization) -> Result<(), Denial> {
-        let state = self.lock();
-        state
-            .live(authorization.lease, self.clock.now())
-            .map(|_| ())
+        let mut state = self.lock();
+        let now = state.now(&self.clock);
+        let record = state.live(authorization.lease, now)?;
+        if record.epoch != authorization.epoch {
+            // Cannot happen for an Authorization this broker made; refuse rather than trust it.
+            return Err(Denial::UnknownLease);
+        }
+        Ok(())
     }
 
     /// Global stop: bumps the epoch, instantly invalidating every outstanding lease and every
@@ -458,8 +490,8 @@ impl<C: Clock> LeaseBroker<C> {
     /// Leases that would pass `check` right now. Expired and revoked ones are not counted, so
     /// this is safe to drive a "capture is live" indicator.
     pub fn active_leases(&self) -> usize {
-        let state = self.lock();
-        let now = self.clock.now();
+        let mut state = self.lock();
+        let now = state.now(&self.clock);
         state
             .leases
             .values()
@@ -758,11 +790,25 @@ mod tests {
     fn unknown_lease_ids_are_denied() {
         let (_clock, broker) = setup();
         assert_eq!(
-            broker.check(LeaseId(0), Action::Capture, &Scope::monitor("hm-a")),
+            broker.check(
+                LeaseId {
+                    broker: u64::MAX,
+                    serial: 0
+                },
+                Action::Capture,
+                &Scope::monitor("hm-a")
+            ),
             Err(Denial::UnknownLease)
         );
         assert_eq!(
-            broker.check(LeaseId(u64::MAX), Action::Capture, &Scope::monitor("hm-a")),
+            broker.check(
+                LeaseId {
+                    broker: u64::MAX,
+                    serial: u64::MAX
+                },
+                Action::Capture,
+                &Scope::monitor("hm-a")
+            ),
             Err(Denial::UnknownLease)
         );
     }
@@ -827,6 +873,78 @@ mod tests {
         assert_eq!(
             broker.grant(request(&broker, "hm-a", CAPTURE, secs(1))),
             Err(GrantError::ClockOverflow)
+        );
+    }
+
+    #[test]
+    fn once_pruned_a_stale_lease_reads_as_unknown_not_stale() {
+        // Documents the trade-off in the README: a grant after a stop drops the dead records.
+        let (_clock, broker) = setup();
+        let old = grant(&broker, "hm-a", CAPTURE, secs(60));
+        broker.revoke_all();
+        let target = Scope::monitor("hm-a");
+        assert_eq!(
+            broker
+                .check(old.id, Action::Capture, &target)
+                .unwrap_err()
+                .code(),
+            "STALE_EPOCH"
+        );
+
+        grant(&broker, "hm-a", CAPTURE, secs(60));
+        assert_eq!(
+            broker.check(old.id, Action::Capture, &target),
+            Err(Denial::UnknownLease)
+        );
+    }
+
+    #[test]
+    fn another_brokers_lease_ids_and_authorizations_mean_nothing() {
+        let (_c1, one) = setup();
+        let (_c2, two) = setup();
+        let a = grant(&one, "hm-a", CAPTURE, secs(60));
+        let b = grant(&two, "hm-a", CAPTURE, secs(60));
+        let target = Scope::monitor("hm-a");
+        assert_ne!(a.id, b.id);
+
+        assert_eq!(
+            two.check(a.id, Action::Capture, &target),
+            Err(Denial::UnknownLease)
+        );
+        let auth = one.check(a.id, Action::Capture, &target).unwrap();
+        assert_eq!(two.verify(&auth), Err(Denial::UnknownLease));
+    }
+
+    #[test]
+    fn a_clock_that_steps_back_cannot_revive_an_expired_lease() {
+        struct Scripted(Mutex<Vec<Duration>>);
+        impl Clock for Scripted {
+            fn now(&self) -> Duration {
+                let mut readings = self.0.lock().unwrap();
+                if readings.len() > 1 {
+                    readings.remove(0)
+                } else {
+                    readings[0]
+                }
+            }
+        }
+        // Granted at 10 s with a 5 s ttl (deadline 15 s). The clock reads 16 s, then steps back
+        // to 12 s, which on its own would be inside the ttl again.
+        let clock = Scripted(Mutex::new(vec![secs(10), secs(16), secs(12)]));
+        let broker = LeaseBroker::with_clock(clock);
+        let lease = broker
+            .grant(request(&broker, "hm-a", CAPTURE, secs(5)))
+            .unwrap();
+        let target = Scope::monitor("hm-a");
+
+        assert_eq!(
+            broker.check(lease.id, Action::Capture, &target),
+            Err(Denial::Expired)
+        );
+        assert_eq!(
+            broker.check(lease.id, Action::Capture, &target),
+            Err(Denial::Expired),
+            "an earlier reading must not bring the lease back"
         );
     }
 
