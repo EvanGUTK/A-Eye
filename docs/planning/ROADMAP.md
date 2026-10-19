@@ -15,6 +15,29 @@ This is an evolving product, but releases still need a bounded definition of don
 
 Total indicative effort through beta: **11–20 focused weeks**, with uncertainty concentrated in Phase 0, native behavior, and provider integrations. Do not promise this as a solo beginner's three-month delivery date. After Phase 0, replace ranges with estimates based on actual completed work.
 
+## Current status (2026-10-18) — read this first
+
+Development pivoted Windows-first on 2026-10-18 (ADR018, `docs/decisions/README.md`), superseding ADR013's Linux-first call below. Phase 0 is substantially done on Windows:
+
+| Item | Status |
+| --- | --- |
+| S0.1 Codex session proof | **Done, live-verified.** 4 PASS/0 FAIL/1 UNVERIFIED (id_token signature). See `docs/planning/LIVE-AUTH-RUNBOOK.md`, PR #42. |
+| S0.2 Claude route proof | **Intentionally blocked.** Anthropic policy (F01) still disallows third-party claude.ai login; see issue #11, #22 item 3 (owner decision still open: pursue written approval, or drop A-Eye-owned Claude OAuth). |
+| S0.3 Native capture proof | **Done on Windows** (parts 17/18, PR #25). Mixed-DPI/negative-origin unverified — this dev machine's 4 monitors are all 100% scale. |
+| S0.4 Voice proof | **Done**, with a caveat: whisper.cpp + archived piper work (part-08, PR #33), but piper's voice-model license needs confirming before shipping (issue #34, ADR019). |
+| S0.5 Shell/packaging proof | **Done.** Tauri 2 → native Windows exe/installer (part-16, PR #31), now hosting the real MCP sidecar in `apps/desktop` (PR #43) — the first actually-runnable product, not just a spike. |
+
+Beyond Phase 0: part-06 (Ollama vision), part-09 (MCP stdio server, 5 tools), part-10 (scope leases — built but **not yet wired into part-09**, which still only gates capture behind a blunt `--allow-capture` flag) are also merged. See `spikes/README.md` for the full per-spike evidence table and issue #22 for the living follow-up tracker.
+
+**Immediate next steps, roughly in priority order:**
+1. Wire part-10 (scope leases) into part-09's MCP server, replacing `--allow-capture`.
+2. Store Codex tokens via the part-01 credential store (issue #10) — token exchange works but nothing persists yet.
+3. Resolve the Claude OAuth release-gate decision (issue #22 item 3) before any Claude-dependent SaaS work.
+4. Confirm a shippable (MIT/CC0) voice model license (issue #34) before voice graduates from spike to feature.
+5. Wire vision (part-06) into `apps/desktop` so captured frames actually get described, not just previewed.
+
+The Linux-first section immediately below (L0.x items) is **paused, not deleted** — resume it if/when Linux becomes a real target again.
+
 ## Phase 0 — Prove the interfaces
 
 Deliver short, reproducible spikes rather than a large scaffold.
@@ -88,9 +111,9 @@ This is a suggested sequence, not a claim that all experiments will fit the time
 
 ---
 
-## Phase 0 — Linux spikes (active development target)
+## Phase 0 — Linux spikes (paused 2026-10-18, see "Current status" above)
 
-ADR-013 supersedes the Windows-first assumption for the current build. The spikes
+ADR-013 superseded the Windows-first assumption when this was written; ADR018 has since superseded ADR013 back to Windows-first. This section is kept for when Linux work resumes, not deleted. The spikes
 below replace or supplement the original Phase 0 items for Arch Linux / Wayland.
 See [LINUX.md](../architecture/LINUX.md), [OAUTH.md](../architecture/OAUTH.md),
 and [LOCAL-MODEL.md](../architecture/LOCAL-MODEL.md) for full context.

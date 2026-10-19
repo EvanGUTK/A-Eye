@@ -1,7 +1,7 @@
 # Spike 07: Windows global hotkey
 
 Standalone Windows equivalent of paused Linux **L0.7 evdev global hotkey on Wayland**
-([original scope](../../docs/planning/ROADMAP.md#phase-0--linux-spikes-active-development-target)). Issue: #37.
+([original scope](../../docs/planning/ROADMAP.md#phase-0--linux-spikes-paused-2026-10-18-see-current-status-above)). Issue: #37.
 This demonstrates an overlay action only: **no screen capture, microphone, agent, or provider**.
 Linux `/dev/input/eventN`, input-group/polkit permissions, and push-to-talk remain paused.
 
