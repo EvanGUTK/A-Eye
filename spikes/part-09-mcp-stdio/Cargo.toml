@@ -9,6 +9,7 @@ description = "A-Eye spike 09: MCP stdio server exposing Windows capture and ove
 [workspace]
 
 [dependencies]
+spike-10-scope-leases = { path = "../part-10-scope-leases" }
 base64 = "=0.22.1"
 png = "=0.18.1"
 serde = { version = "1", features = ["derive"] }

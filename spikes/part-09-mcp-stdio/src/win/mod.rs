@@ -4,7 +4,10 @@ mod capture;
 mod monitors;
 mod overlay;
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use spike_10_scope_leases::{Authorization, LeaseBroker};
 
 use windows::Graphics::Capture::GraphicsCaptureSession;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
@@ -23,7 +26,7 @@ pub struct WindowsBackend {
 }
 
 impl WindowsBackend {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(broker: Arc<LeaseBroker>) -> Result<Self, String> {
         // Per-monitor v2 makes every rect, size and cursor position physical pixels. It must be
         // set before any window exists, and a wrong awareness level would silently skew every
         // coordinate, so failure is fatal.
@@ -35,7 +38,7 @@ impl WindowsBackend {
             .map_err(|e| format!("RoInitialize failed: {e}"))?;
         Ok(Self {
             gpu: None,
-            overlays: overlay::OverlayManager::new(),
+            overlays: overlay::OverlayManager::new(broker),
         })
     }
 
@@ -53,6 +56,10 @@ impl WindowsBackend {
 }
 
 impl Backend for WindowsBackend {
+    fn ensure_local_stop(&mut self) -> Result<(), ToolError> {
+        self.overlays.ensure_hotkey()
+    }
+
     fn list_monitors(&mut self) -> Result<Vec<MonitorInfo>, ToolError> {
         Ok(monitors::enumerate()?
             .iter()
@@ -74,9 +81,11 @@ impl Backend for WindowsBackend {
         monitor_id: &str,
         color: Rgb,
         lifetime: Duration,
+        authorization: Authorization,
     ) -> Result<OverlayStarted, ToolError> {
         let monitor = monitors::find(monitor_id)?;
-        self.overlays.start(&monitor, color, lifetime)
+        self.overlays
+            .start(&monitor, color, lifetime, authorization)
     }
 
     fn stop_overlay(&mut self, handle: &str) -> Result<OverlayStopped, ToolError> {

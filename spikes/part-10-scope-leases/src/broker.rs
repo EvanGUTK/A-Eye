@@ -55,6 +55,31 @@ impl fmt::Display for LeaseId {
     }
 }
 
+impl std::str::FromStr for LeaseId {
+    type Err = Denial;
+
+    /// Parse the wire representation, not an authorization. Always call `check` afterwards.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (broker, serial) = value
+            .strip_prefix("lease-")
+            .and_then(|s| s.split_once('.'))
+            .ok_or(Denial::UnknownLease)?;
+        let parse = |part: &str| {
+            if part.is_empty()
+                || !part.bytes().all(|b| b.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+            {
+                return Err(Denial::UnknownLease);
+            }
+            part.parse::<u64>().map_err(|_| Denial::UnknownLease)
+        };
+        Ok(Self {
+            broker: parse(broker)?,
+            serial: parse(serial)?,
+        })
+    }
+}
+
 /// Source of per-process broker ids.
 static NEXT_BROKER_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -509,6 +534,53 @@ mod tests {
 
     const CAPTURE: Actions = Actions::NONE.with(Action::Capture);
     const BOTH: Actions = CAPTURE.with(Action::Overlay);
+
+    #[test]
+    fn wire_lease_ids_round_trip_but_still_require_broker_authorization() {
+        let broker = LeaseBroker::new();
+        let lease = grant(&broker, "hm-a", CAPTURE, secs(5));
+        let parsed = lease.id.to_string().parse::<LeaseId>().unwrap();
+        assert_eq!(parsed, lease.id);
+        assert!(broker
+            .check(parsed, Action::Capture, &Scope::monitor("hm-a"))
+            .is_ok());
+        let other = LeaseBroker::new();
+        assert_eq!(
+            other.check(parsed, Action::Capture, &Scope::monitor("hm-a")),
+            Err(Denial::UnknownLease)
+        );
+        let maximal = "lease-18446744073709551615.18446744073709551615";
+        assert_eq!(maximal.parse::<LeaseId>().unwrap().to_string(), maximal);
+    }
+
+    #[test]
+    fn malformed_wire_lease_ids_are_denied() {
+        for value in [
+            "",
+            "lease-",
+            "lease-1",
+            "lease-1.",
+            "lease-.1",
+            "lease-1.2.3",
+            "lease-01.2",
+            "lease-1.02",
+            "lease-+1.2",
+            "lease-1.-2",
+            "lease-1. 2",
+            "lease-1.2 ",
+            " lease-1.2",
+            "lease-1.2\0",
+            "lease-１.2",
+            "lease-18446744073709551616.0",
+            "lease-0.18446744073709551616",
+        ] {
+            assert_eq!(
+                value.parse::<LeaseId>(),
+                Err(Denial::UnknownLease),
+                "{value:?}"
+            );
+        }
+    }
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)

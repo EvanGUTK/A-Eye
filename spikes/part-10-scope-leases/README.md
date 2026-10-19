@@ -1,8 +1,9 @@
 # Spike 10: scope leases + epoch revocation
 
 A standalone, std-only Rust library (plus an evidence binary) for the consent primitive in ADR008
-(`../../docs/decisions/README.md`). **It is not wired into anything yet**: part 09's
-`--allow-capture` flag is untouched and still the only gate there.
+(`../../docs/decisions/README.md`). Part 09 now uses this broker for its MCP capture and overlay
+lease gates; see [the integration and its verification limits](../part-09-mcp-stdio/README.md).
+That integration is Linux-tested with synthetic backends; its Windows wiring is unverified.
 
 Issue: #38. Status and what is unproven: see the table in `../README.md` and the end of this file.
 
@@ -44,11 +45,11 @@ Native Windows, over the UNC path (see `../README.md`, "Platform pivot"):
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$env:TEMP\aeye10-target"
-cd \\wsl$\Ubuntu\home\usaas\projects\code\A-Eye-worktrees\scope-leases\spikes\part-10-scope-leases
+cd \\wsl$\Ubuntu\home\usaas\projects\code\A-Eye-worktrees\scope-leases-wire\spikes\part-10-scope-leases
 cargo test; cargo run
 ```
 
-## How part 09 could adopt it (design only, not implemented)
+## How part 09 adopts it
 
 ```
 aeye_capture_monitor(monitor_id, lease_id):
@@ -58,9 +59,20 @@ aeye_capture_monitor(monitor_id, lease_id):
     stamp the observation with auth.epoch()     // the envelope's capture_epoch
 ```
 
-`grant` and `revoke_all` must be reachable only from native, local code: an approval control for
-`grant`, and the existing Ctrl+Alt+Q handler (and a stop button) for `revoke_all`. They must not be
-MCP tools. That wiring does not exist.
+The production design requires `grant` and `revoke_all` to be reachable only from native, local
+code: an approval control for `grant`, and Ctrl+Alt+Q (and a stop button) for `revoke_all`. They must
+not be agent approval tools.
+
+**Part 09's explicit spike exception:** `aeye_status` exposes the epoch and `aeye_request_watch`
+auto-approves every valid MCP lease request, simulating the missing GUI approval control. This
+exercises enforcement but does not establish real user consent and must be replaced before product
+use. `revoke_all` remains native-only: the shared broker is wired to Ctrl+Alt+Q before any lease,
+including capture-only, is granted. Capture and overlay start use `check`/`verify`; overlay workers
+also poll authorization for expiry/revocation. This Windows wiring has not been built or run in the
+Linux integration session. The broker itself remains platform independent.
+
+`LeaseId` now implements strict `FromStr` for the displayed `lease-<broker>.<serial>` form so MCP
+can pass ids back. Parsing is not authorization: only broker `check` can validate the record.
 
 ## Decisions
 
@@ -84,7 +96,15 @@ MCP tools. That wiring does not exist.
   rather than propagated, so a stop still works if another thread panicked.
 - **No dependencies, no hand-rolled MCP types.** The primitive does not know about MCP or Windows.
 
-## Evidence
+## Integration verification (2026-10-19)
+
+Linux verification with Rust/Cargo 1.93.1 passes 25 unit tests plus 7 threaded/real-clock tests,
+all 8 evidence-binary checks, strict Clippy and formatting. Tests cover the wire-id parser (round trip, canonical format, overflow, malformed ids and
+another broker's refusal), in addition to the original broker suite. Part 09's synthetic tests
+exercise dispatch and delivery gates; see its README for commands and Windows-deferred checks.
+No new Windows build, runtime or native hotkey evidence was collected in this integration session.
+
+## Original standalone evidence
 
 Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (same results):
 
@@ -119,8 +139,9 @@ Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (s
 
 ## Not proven
 
-- **Not wired in.** Part 09 does not call this; no MCP tool takes a lease; no approval UI or stop
-  control exists. `revoke_all` is a function, not a hotkey.
+- **Integration is not Windows-verified.** Part 09 calls this broker and has native hotkey wiring,
+  but only its portable paths were tested during integration. No local approval UI exists; the
+  MCP grant path explicitly auto-approves in this spike. There is still no stop button.
 - **Lease ids are guessable counters and not bound to a client or session.** Anyone who can submit a
   `LeaseId` to the broker can use that lease. A real design needs an unguessable token bound to the
   session it was granted for.

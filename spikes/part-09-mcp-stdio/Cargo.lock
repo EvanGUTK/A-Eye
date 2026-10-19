@@ -175,8 +175,13 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "spike-10-scope-leases",
  "windows",
 ]
+
+[[package]]
+name = "spike-10-scope-leases"
+version = "0.1.0"
 
 [[package]]
 name = "syn"

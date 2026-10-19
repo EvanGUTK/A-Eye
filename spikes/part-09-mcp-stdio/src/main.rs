@@ -4,9 +4,9 @@
 //! The host launches this process and talks JSON-RPC over its stdin/stdout. There is no network
 //! listener of any kind. stdout carries protocol messages only; diagnostics go to stderr.
 //!
-//! Usage: spike-09-mcp-stdio [--allow-capture]
-//!   --allow-capture   let aeye_capture_monitor return pixels. Off by default: scope leases
-//!                     (spike 10) do not exist yet, so the user opts in when wiring up the server.
+//! Usage: spike-09-mcp-stdio
+//! Capture and overlay start require scope leases. MCP lease requests auto-approve in this spike
+//! without a local user prompt; this is not production consent.
 
 // Off Windows only the tests build the portable layers; the real backend is Windows-only.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -18,24 +18,20 @@ mod tools;
 #[cfg(windows)]
 mod win;
 
-const USAGE: &str = "usage: spike-09-mcp-stdio [--allow-capture]";
+const USAGE: &str = "usage: spike-09-mcp-stdio";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
-    Run { allow_capture: bool },
+    Run,
     Help,
 }
 
-fn parse_cli(args: impl Iterator<Item = String>) -> Result<Cli, String> {
-    let mut allow_capture = false;
-    for arg in args {
-        match arg.as_str() {
-            "--allow-capture" => allow_capture = true,
-            "--help" | "-h" => return Ok(Cli::Help),
-            other => return Err(format!("unknown argument {other}")),
-        }
+fn parse_cli(mut args: impl Iterator<Item = String>) -> Result<Cli, String> {
+    match args.next().as_deref() {
+        None => Ok(Cli::Run),
+        Some("--help" | "-h") => Ok(Cli::Help),
+        Some(other) => Err(format!("unknown argument {other}")),
     }
-    Ok(Cli::Run { allow_capture })
 }
 
 #[cfg(not(windows))]
@@ -48,8 +44,8 @@ fn main() {
 fn main() {
     use std::io;
 
-    let allow_capture = match parse_cli(std::env::args().skip(1)) {
-        Ok(Cli::Run { allow_capture }) => allow_capture,
+    match parse_cli(std::env::args().skip(1)) {
+        Ok(Cli::Run) => {}
         Ok(Cli::Help) => {
             println!("{USAGE}");
             return;
@@ -59,7 +55,8 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let mut backend = match win::WindowsBackend::new() {
+    let config = tools::ToolConfig::default();
+    let mut backend = match win::WindowsBackend::new(std::sync::Arc::clone(&config.broker)) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("[aeye-mcp] startup failed: {e}");
@@ -67,15 +64,10 @@ fn main() {
         }
     };
     eprintln!(
-        "[aeye-mcp] serving MCP {} on stdio; capture {}",
+        "[aeye-mcp] serving MCP {} on stdio; scope leases required; WARNING: spike-only \
+         MCP lease requests AUTO-APPROVE without local user consent",
         protocol::PROTOCOL_VERSION,
-        if allow_capture {
-            "ENABLED (--allow-capture)"
-        } else {
-            "disabled (start with --allow-capture to enable)"
-        }
     );
-    let config = tools::ToolConfig { allow_capture };
     if let Err(e) = protocol::serve(
         io::stdin().lock(),
         io::stdout().lock(),
@@ -97,19 +89,9 @@ mod tests {
     }
 
     #[test]
-    fn capture_is_off_unless_asked() {
-        assert_eq!(
-            cli(&[]),
-            Ok(Cli::Run {
-                allow_capture: false
-            })
-        );
-        assert_eq!(
-            cli(&["--allow-capture"]),
-            Ok(Cli::Run {
-                allow_capture: true
-            })
-        );
+    fn legacy_capture_gate_is_rejected() {
+        assert_eq!(cli(&[]), Ok(Cli::Run));
+        assert!(cli(&["--allow-capture"]).is_err());
     }
 
     #[test]
