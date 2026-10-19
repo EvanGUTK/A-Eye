@@ -71,7 +71,8 @@ slowest run**.
 |---|---|---|
 | 3.2-3.9 s of speech, 4 fixtures | 726-777 ms | 399-425 ms |
 
-Of the base.en wall time, ~98 ms is model load and ~675-710 ms is inference; real-time factor ~0.2.
+Of the base.en wall time, whisper reports ~675-710 ms engine total, of which ~98 ms is model load
+(so ~580-610 ms is mel/encode/decode); the rest is process start. Real-time factor ~0.2.
 
 | TTS, 2.6-3.3 s of audio, 5 texts | p50 |
 |---|---|
