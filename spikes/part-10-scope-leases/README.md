@@ -104,7 +104,7 @@ Tested on this machine, with WSL cargo 1.93.1 and native Windows cargo 1.99.0 (s
   clock.
 - `cargo run` on both machines: 8 checks (L1 expiry, R1-R3 revocation, S1-S2 scope/action, C1-C2
   concurrency) all PASS. The race check ran 500 iterations x 8 threads; the interleaving was
-  mixed (some grants won, some lost) in 461 of 500 iterations on WSL and 153 of 500 on Windows, so
+  mixed (some grants won, some lost) in 139 to 461 of 500 iterations across runs (461 in one WSL run, 139 and 153 in Windows runs), so
   the race window was exercised but how often depends on the scheduler.
 - Mutation check by hand: removing the epoch comparison, making expiry inclusive, removing expiry,
   removing the scope check, ignoring `observed_epoch` in `grant`, and not bumping the epoch in
