@@ -42,7 +42,11 @@ foreach ($d in $Downloads) {
         Write-Host "downloading $($d.Name)"
         # curl.exe ships with Windows 10+ and follows redirects without the progress-bar slowdown.
         & curl.exe -fsSL -o $path $d.Url
-        if ($LASTEXITCODE -ne 0) { throw "download failed: $($d.Url)" }
+        if ($LASTEXITCODE -ne 0) {
+            # A failed transfer can leave a partial file that the next run would otherwise skip.
+            Remove-Item -Force -ErrorAction SilentlyContinue $path
+            throw "download failed: $($d.Url)"
+        }
     }
     $actual = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
     if ($actual -ne $d.Sha256) {
@@ -52,7 +56,8 @@ foreach ($d in $Downloads) {
     Write-Host "ok  $($d.Name)  sha256=$actual"
 }
 
-# whisper zip is flat (whisper-cli.exe + dlls); piper zip contains a top-level piper\ directory.
+# Both zips contain a top-level directory: whisper\Release\ (whisper-cli.exe + dlls) and piper\ (piper.exe).
+# The spike expects exactly these paths.
 Expand-Archive -Force -Path (Join-Path $ToolsDir 'whisper-bin-x64.zip') -DestinationPath (Join-Path $ToolsDir 'whisper')
 Expand-Archive -Force -Path (Join-Path $ToolsDir 'piper_windows_amd64.zip') -DestinationPath $ToolsDir
 

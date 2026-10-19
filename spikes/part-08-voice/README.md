@@ -47,8 +47,9 @@ digits, so transcripts compare without number normalisation.
 
 ## What it checks
 
-- **STT**: each fixture through `whisper-cli` (base.en); pass if word error rate (WER) <= 0.10. With
-  8-11 word sentences that means zero word errors. `tiny.en` is run as a comparison.
+- **STT**: each fixture through `whisper-cli` (base.en); pass if word error rate (WER) <= 0.10. The
+  8-9 word sentences therefore need zero word errors; the 11-word ones would still pass with one
+  (1/11 = 0.091). `tiny.en` is run as a comparison.
 - **STT latency**: wall time from process spawn to transcript, 5 runs per fixture.
 - **TTS**: 5 short strings through piper to WAV; pass if valid 16-bit mono WAV, duration plausible for
   the word count, and not silent.
