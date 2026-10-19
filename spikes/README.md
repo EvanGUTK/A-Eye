@@ -10,21 +10,21 @@ a merged spike is not a finished capability. Details are in each spike's capabil
 | Part | Spike | Status | Issues |
 |---|---|---|---|
 | 01 | Credential store (keyring + fallback) | merged (#17): Secret Service and encrypted-file fallback proven; default keyring on the test machine is unencrypted (SS-05 FAIL) | #3 #4 #5 #6 closed |
-| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified | #7 #8 closed; #9 #10 open |
-| 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01) | #11 #12 open |
+| 02 | Codex OAuth PKCE | merged (#16): PKCE, loopback callback, token exchange and keyring store proven against a **mock** provider; live Codex flow unverified. On branch `agents/sessions`, not merged: `--live-plan-usage` for OpenAI's documented open-source route, synthetic-mock tested; real binary reached the real token endpoint with a fake code (see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md)) | #7 #8 closed; #9 #10 open |
+| 03 | Claude OAuth PKCE | merged (#19): PKCE, token exchange and env-only SDK token handoff proven against a **mock** provider; live flow and real SDK session unverified; Anthropic policy risk recorded (F01, re-read 2026-10-18, unchanged); no live run is prepared, see [runbook](../docs/planning/LIVE-AUTH-RUNBOOK.md) | #11 #12 open |
 | 04 | XDG ScreenCast + PipeWire frame | merged (#18): real frame captured via portal and saved as PNG on Hyprland; monitor id/scale (M1) and two-monitor different-scale (M2) unverified | #14 closed; #13 #15 open |
 | 05 | wlr-layer-shell orange border | paused (Linux-only overlay; see platform pivot below) | |
 | 06 | Ollama vision (local model) | todo | |
 | 07 | evdev global hotkey | todo | |
 | 08 | Voice: whisper.cpp STT + piper TTS | done on branch `agents/voice`, not merged (#27): on Windows, offline, 4 synthetic SAPI-speech fixtures transcribed with 0 word errors by whisper.cpp 1.9.5 (base.en wall p50 ~0.73-0.88 s per ~3.5 s clip, tiny.en ~0.40-0.48 s) and 5 strings synthesised by piper 1.2.0 (first audio ~0.28-0.39 s, WAV ready ~0.32-0.38 s; both include per-call model load); piper-to-whisper round trip passed 5/5 in 2 of 3 runs (1 word substituted in the other); **whisper base.en invented "you" on 2 s of silence in all 3 runs**; live mic/speaker, playback cancel, enforced network isolation, real human speech **unverified**; piper is archived and voice dataset licences need review | #27 open |
-| 09 | MCP stdio server (7 tools) | todo | |
+| 09 | MCP stdio server (5 tools over Windows capture + overlay) | done on branch `agents/mcp-bridge`, not merged (#28): hand-written MCP 2025-11-25 server over stdio only (no network listener; zero TCP/UDP endpoints on the process), tools list/capture/overlay start+stop/cursor; capture is off unless started with `--allow-capture` (no scope leases yet); live run through the real binary: capture size matches, orange border seen in a capture of **all 4 monitors** (one portrait), colour param, expiry, injected Ctrl+Alt+Q, stop on stdin close, second server refuses while hotkey held; Claude Code 2.1.303 completed the handshake and called `aeye_list_monitors`. **Unverified:** a host rendering the image result, Codex CLI as host, mixed-DPI (all monitors 100%), borders not inspected by eye, external WM_CLOSE path | #28 open |
 | 10 | Scope leases + epoch revocation | todo | |
 | 11 | Coordinate transforms + crop pipeline | todo | |
 | 12 | Observation envelope validation | todo | |
 | 13 | Session registry + binding | todo | |
 | 14 | Codex app-server managed session | todo | |
 | 15 | Claude SDK managed session | todo | |
-| 16 | Tauri shell + AppImage | todo | |
+| 16 | Tauri 2 shell as a Windows exe (was Linux AppImage; see [part-16-windows-shell](part-16-windows-shell/README.md)) | done on branch `agents/packaging`, not merged (#26): Tauri 2.12.4 shell bundled to unsigned NSIS and MSI installers; standalone and NSIS-installed exe launch as a real window (non-zero `MainWindowHandle`, title set, page inspected by eye) loading only bundled assets, with 0 TCP sockets in the process tree and no new system-wide TCP listener; NSIS install and uninstall work; an intermittent WebView2 wildcard UDP socket was seen in 2 launches and is **unexplained**; MSI install, signing, clean-machine (WebView2 absent), AppImage/Linux untested | #26 open |
 | 17 | Windows.Graphics.Capture monitor frame | done on branch `feat/spike-17-18-windows`, not merged (#23): real frame of each of 4 monitors (one portrait) captured via windows-rs and saved as PNG (size matches the monitor, not uniform); monitor handle, device, DPI scale and cursor position recorded; two-monitor different-scale (M2) **unverified** (all 4 monitors are at 100%); PNG contents not inspected by eye | #23 open |
 | 18 | Win32 layered-window orange border overlay | done on branch `feat/spike-17-18-windows`, not merged (#24): layered, click-through, non-activating, topmost window drew a border over the primary monitor (composited pixel read back as the orange); foreground window unchanged, with a control showing an ordinary window does change it; click-through and local close (timeout and injected Ctrl+Alt+Q) proven; Ctrl+C and external WM_CLOSE stop paths **unverified**; the `--region` argument, non-primary monitors and non-100% scales untested; border not inspected by eye | #24 open |
 
@@ -48,7 +48,8 @@ to avoid it. Confirmed working with `cargo check --target x86_64-pc-windows-msvc
 ## What is still unverified (parts 01-04)
 
 - Live OAuth against Codex (part 02) and Claude (part 03): needs interactive browser consent on a real
-  subscription. Part 03's live use should wait for Anthropic's approval or a switch to the permitted path
+  subscription. Codex is one command once a human is ready (`docs/planning/LIVE-AUTH-RUNBOOK.md`); the
+  parameters the real authorize endpoint accepts can only be checked in a browser (Cloudflare challenge). Part 03's live use should wait for Anthropic's approval or a switch to the permitted path
   (see the F01 finding in its capability record and PR #19).
 - Real Claude Agent SDK session turn and whether the SDK accepts a subscription token (part 03).
 - Selected-stream monitor id/scale and the two-monitor different-scale capture (part 04).

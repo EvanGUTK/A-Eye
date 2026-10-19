@@ -101,13 +101,25 @@ pub fn exchange_code(
     client: &reqwest::blocking::Client,
     req: &ExchangeRequest<'_>,
 ) -> Result<TokenSet, TokenError> {
-    let body = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("grant_type", "authorization_code")
+    exchange_code_with_params(client, req, &[])
+}
+
+/// As [`exchange_code`], with extra form fields (the ChatGPT plan-usage exchange adds `resource`).
+pub fn exchange_code_with_params(
+    client: &reqwest::blocking::Client,
+    req: &ExchangeRequest<'_>,
+    extra: &[(&str, &str)],
+) -> Result<TokenSet, TokenError> {
+    let mut form = url::form_urlencoded::Serializer::new(String::new());
+    form.append_pair("grant_type", "authorization_code")
         .append_pair("code", req.code.expose())
         .append_pair("code_verifier", req.code_verifier.expose())
         .append_pair("redirect_uri", req.redirect_uri)
-        .append_pair("client_id", req.client_id)
-        .finish();
+        .append_pair("client_id", req.client_id);
+    for (k, v) in extra {
+        form.append_pair(k, v);
+    }
+    let body = form.finish();
 
     let resp = client
         .post(req.token_url)

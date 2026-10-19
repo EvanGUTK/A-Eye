@@ -113,14 +113,14 @@ fn serve(
     }
 }
 
-struct Req {
-    method: String,
-    path: String,
-    query: String,
-    body: Vec<u8>,
+pub(crate) struct Req {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) query: String,
+    pub(crate) body: Vec<u8>,
 }
 
-fn read_req(stream: &mut TcpStream) -> Option<Req> {
+pub(crate) fn read_req(stream: &mut TcpStream) -> Option<Req> {
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     let mut buf = Vec::new();
@@ -163,7 +163,7 @@ fn read_req(stream: &mut TcpStream) -> Option<Req> {
     Some(Req { method, path: path.to_string(), query: query.to_string(), body })
 }
 
-fn write_resp(stream: &mut TcpStream, status: &str, extra: &str, ctype: &str, body: &str) {
+pub(crate) fn write_resp(stream: &mut TcpStream, status: &str, extra: &str, ctype: &str, body: &str) {
     let msg = format!(
         "HTTP/1.1 {status}\r\n{extra}Content-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -172,12 +172,12 @@ fn write_resp(stream: &mut TcpStream, status: &str, extra: &str, ctype: &str, bo
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
-fn json_err(stream: &mut TcpStream, status: &str, error: &str, desc: &str) {
+pub(crate) fn json_err(stream: &mut TcpStream, status: &str, error: &str, desc: &str) {
     let body = serde_json::json!({"error": error, "error_description": desc}).to_string();
     write_resp(stream, status, "", "application/json", &body);
 }
 
-fn rand_token(prefix: &str) -> String {
+pub(crate) fn rand_token(prefix: &str) -> String {
     let mut b = [0u8; 18];
     rand::rng().fill_bytes(&mut b);
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};

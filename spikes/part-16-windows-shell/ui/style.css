@@ -1,0 +1,5 @@
+body { margin: 0; font: 16px/1.5 "Segoe UI", sans-serif; background: #14110f; color: #f2ede7; }
+main { padding: 32px; }
+h1 { margin: 0 0 8px; color: #ff8a1f; }
+code { background: #2a2420; padding: 2px 6px; border-radius: 4px; }
+.origin { margin-top: 24px; font-size: 14px; color: #bdb3a8; }
