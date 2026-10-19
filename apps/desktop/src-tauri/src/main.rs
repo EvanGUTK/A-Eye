@@ -2,7 +2,8 @@
 
 #[cfg(windows)]
 fn main() {
-    use aeye_desktop::host::{Action, Host, Outcome};
+    use aeye_desktop::host::{Action, Description, Host, Outcome};
+    use aeye_desktop::vision;
     use aeye_desktop::worker::Worker;
     use tauri::Manager;
 
@@ -19,14 +20,30 @@ fn main() {
         })
     }
 
+    // Describe the frame the host retained; the renderer names it by id and never supplies pixels.
+    #[tauri::command]
+    fn describe_frame(
+        state: tauri::State<'_, Worker>,
+        capture_id: u64,
+        reply: tauri::ipc::Channel<Description>,
+    ) -> Result<(), String> {
+        state.submit_describe(capture_id, move |description| {
+            let _ = reply.send(description);
+        })
+    }
+
     let executable = std::env::current_exe().expect("locate the desktop executable");
     let sidecar = executable
         .parent()
         .expect("desktop executable directory")
         .join("aeye-mcp.exe");
     tauri::Builder::default()
-        .manage(Worker::start(Host::new(sidecar)))
-        .invoke_handler(tauri::generate_handler![desktop_action])
+        .manage(Worker::start(Host::with_describer(
+            sidecar,
+            // Endpoint and model come from the process environment, never from the renderer.
+            vision::from_env(|name| std::env::var(name).ok()),
+        )))
+        .invoke_handler(tauri::generate_handler![desktop_action, describe_frame])
         .build(tauri::generate_context!())
         .expect("build the A-Eye desktop window")
         .run(|app, event| {

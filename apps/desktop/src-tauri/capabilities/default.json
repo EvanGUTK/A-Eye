@@ -1,6 +1,6 @@
 {
   "identifier": "main-window",
-  "description": "Only the bundled main window can use the fixed desktop controls.",
+  "description": "Only the bundled main window can use the fixed desktop controls and describe its latest frame.",
   "windows": ["main"],
-  "permissions": ["allow-desktop-action"]
+  "permissions": ["allow-desktop-action", "allow-describe-frame"]
 }

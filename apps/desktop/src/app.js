@@ -2,6 +2,8 @@
 
 const POLL_INTERVAL_MS = 2000;
 const NATIVE_REPLY_TIMEOUT_MS = 30_000;
+// The native model request is bounded at 120 s; wait slightly longer so its own error wins.
+const DESCRIBE_REPLY_TIMEOUT_MS = 130_000;
 const EMPTY_PREVIEW_MESSAGE = "No frame captured.";
 
 function monitorFingerprint(monitor) {
@@ -17,15 +19,33 @@ function errorMessage(error) {
 
 function isLocalPreview(preview, selectedId) {
   return preview && preview.monitor_id === selectedId
+    && Number.isInteger(preview.capture_id) && preview.capture_id > 0
     && typeof preview.data_url === "string"
     && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(preview.data_url)
     && Number.isInteger(preview.width) && preview.width > 0
     && Number.isInteger(preview.height) && preview.height > 0;
 }
 
+// Native description text is untrusted model output; keep only what the view renders.
+function parseDescription(result, captureId) {
+  const matches = Boolean(result) && result.capture_id === captureId;
+  if (matches && typeof result.text === "string" && result.text.length > 0 && !result.error) {
+    return {
+      status: "done", captureId, text: result.text,
+      model: typeof result.model === "string" && result.model ? result.model : null,
+      elapsedMs: Number.isFinite(result.elapsed_ms) ? result.elapsed_ms : null,
+    };
+  }
+  if (matches && typeof result.error === "string" && result.error.length > 0) {
+    return { status: "error", captureId, error: result.error };
+  }
+  return { status: "error", captureId, error: "The native host returned an invalid description response." };
+}
+
 function createNativeInvoker(core, timers = globalThis) {
-  return (command, { action }) => new Promise((resolve, reject) => {
+  return (command, args) => new Promise((resolve, reject) => {
     const reply = new core.Channel();
+    const timeoutMs = command === "describe_frame" ? DESCRIBE_REPLY_TIMEOUT_MS : NATIVE_REPLY_TIMEOUT_MS;
     let settled = false;
     let timeout = null;
 
@@ -39,11 +59,11 @@ function createNativeInvoker(core, timers = globalThis) {
 
     reply.onmessage = (outcome) => finish(resolve, outcome);
     timeout = timers.setTimeout(() => {
-      finish(reject, new Error("The native host did not reply within 30 seconds."));
-    }, NATIVE_REPLY_TIMEOUT_MS);
+      finish(reject, new Error(`The native host did not reply within ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
     try {
       // Enqueue now so a later stop cannot overtake this action at the native boundary.
-      Promise.resolve(core.invoke(command, { action, reply }))
+      Promise.resolve(core.invoke(command, { ...args, reply }))
         .catch((error) => finish(reject, error));
     } catch (error) {
       finish(reject, error);
@@ -64,6 +84,7 @@ function createController(invoke, onChange = () => {}) {
     preview: null,
     previewToken: 0,
     previewMessage: EMPTY_PREVIEW_MESSAGE,
+    description: null,
   };
   let requestNumber = 0;
   let lastAppliedRequest = 0;
@@ -75,15 +96,18 @@ function createController(invoke, onChange = () => {}) {
     const disconnecting = [...pending.values()].includes("disconnect");
     const hiding = [...pending.values()].includes("hide_overlay");
     const ready = state.status.connected && !state.transportUnknown;
+    const describing = state.description?.status === "running";
     return {
-      ...state, busy, connecting, disconnecting,
+      ...state, busy, connecting, disconnecting, describing,
       canConnect: !busy && (!state.status.connected || state.transportUnknown),
       canDisconnect: !disconnecting && (state.status.connected || connecting || state.transportUnknown),
       canSelect: ready && !busy && !state.status.overlay,
       canRefresh: ready && !busy,
       canShow: ready && !busy && Boolean(state.selectedId) && !state.status.overlay,
       canHide: !disconnecting && !hiding && (state.status.connected || connecting || state.transportUnknown),
-      canCapture: ready && !busy && Boolean(state.selectedId),
+      // Capturing again would orphan the running description; wait for it to finish.
+      canCapture: ready && !busy && !describing && Boolean(state.selectedId),
+      canDescribe: ready && !describing && Boolean(state.preview),
     };
   }
 
@@ -92,6 +116,8 @@ function createController(invoke, onChange = () => {}) {
   function clearPreview(message = EMPTY_PREVIEW_MESSAGE) {
     state.previewToken += 1;
     state.preview = null;
+    // A description belongs to one frame; any result still in flight is discarded by its token.
+    state.description = null;
     state.previewMessage = message;
   }
 
@@ -225,17 +251,56 @@ function createController(invoke, onChange = () => {}) {
     emit();
   }
 
-  return { view, perform, selectMonitor, previewDecoded, previewFailed };
+  async function describe() {
+    if (!view().canDescribe) return false;
+    const previewToken = state.previewToken;
+    const requestLifecycle = lifecycle;
+    const captureId = state.preview.capture_id;
+    state.description = { status: "running", captureId };
+    emit();
+    let outcome;
+    try {
+      outcome = parseDescription(await invoke("describe_frame", { captureId }), captureId);
+    } catch (error) {
+      outcome = { status: "error", captureId, error: `Description request failed: ${errorMessage(error)}` };
+    }
+    // The frame was replaced or cleared while the model ran: show nothing for it.
+    if (previewToken !== state.previewToken || requestLifecycle !== lifecycle) return false;
+    state.description = outcome;
+    emit();
+    return outcome.status === "done";
+  }
+
+  return { view, perform, describe, selectMonitor, previewDecoded, previewFailed };
 }
 
 function mountDesktop(document, invoke, timers = globalThis) {
   const ids = ["connection-state", "connect", "disconnect", "error", "monitor", "monitor-details",
     "selection-message", "refresh-monitors", "show-overlay", "hide-overlay", "capture", "overlay-state",
-    "preview", "preview-state", "preview-details"];
+    "preview", "preview-state", "preview-details", "describe", "description", "description-text",
+    "description-state"];
   const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
   let monitorOptions = "";
   let renderedPreviewKey = null;
   let controller;
+
+  function renderDescription(description) {
+    elements.description.hidden = !description;
+    // Model output is untrusted: textContent only, never markup.
+    elements["description-text"].textContent = description?.status === "done" ? description.text : "";
+    elements["description-text"].hidden = description?.status !== "done";
+    if (!description) {
+      elements["description-state"].textContent = "";
+    } else if (description.status === "running") {
+      elements["description-state"].textContent = "Asking the local model… the first request can take a minute while it loads.";
+    } else if (description.status === "error") {
+      elements["description-state"].textContent = `Description failed: ${description.error}`;
+    } else {
+      const seconds = description.elapsedMs === null ? "" : ` · ${(description.elapsedMs / 1000).toFixed(1)} s`;
+      elements["description-state"].textContent =
+        `Local model ${description.model ?? "(unnamed)"}${seconds} · Unverified model output; it can be wrong.`;
+    }
+  }
 
   function render(state) {
     const connection = elements["connection-state"];
@@ -252,6 +317,9 @@ function mountDesktop(document, invoke, timers = globalThis) {
     elements["show-overlay"].disabled = !state.canShow;
     elements["hide-overlay"].disabled = !state.canHide;
     elements.capture.disabled = !state.canCapture;
+    elements.describe.disabled = !state.canDescribe;
+    elements.describe.textContent = state.describing ? "Describing…" : "Describe frame";
+    renderDescription(state.description);
     elements.capture.textContent = state.previewMessage === "Capturing one frame…" ? "Capturing…" : "Capture one frame";
     elements.error.textContent = state.error || "";
     elements.error.hidden = !state.error;
@@ -317,6 +385,7 @@ function mountDesktop(document, invoke, timers = globalThis) {
   ]) {
     elements[id].addEventListener("click", () => { void controller.perform(action); });
   }
+  elements.describe.addEventListener("click", () => { void controller.describe(); });
   elements.monitor.addEventListener("change", () => {
     if (!controller.selectMonitor(elements.monitor.value)) elements.monitor.value = controller.view().selectedId || "";
   });
