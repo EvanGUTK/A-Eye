@@ -218,6 +218,7 @@ fn spawn_overlay(
     reason: Arc<AtomicU8>,
 ) -> Result<JoinHandle<()>, ToolError> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+    let reason_on_timeout = Arc::clone(&reason);
     let thread = thread::Builder::new()
         .name("aeye-overlay".into())
         .spawn(move || overlay_thread(region, colour, lifetime, &reason, &ready_tx))
@@ -228,7 +229,12 @@ fn spawn_overlay(
             let _ = thread.join();
             Err(ToolError::new(format!("overlay window not created: {e}")))
         }
-        Err(_) => Err(ToolError::new("overlay thread did not report in time")),
+        Err(_) => {
+            // The caller gets no handle for a late window, so nothing else can reach it: make it
+            // destroy itself on its first poll instead of lingering for its whole lifetime.
+            set_reason(&reason_on_timeout, REASON_SHUTDOWN);
+            Err(ToolError::new("overlay thread did not report in time"))
+        }
     }
 }
 
