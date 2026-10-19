@@ -73,11 +73,22 @@ detailed ones.
 
 ## Immediate next steps (engineering, no human decision needed first)
 
-See `docs/planning/ROADMAP.md`'s "Current status" section for the full ranked list. Short version:
-wire apps/desktop to part-10 scope leases for real (issue #52 — `aeye_request_watch` +
-`lease_id` plumbing, so the actual UI button works, not just the direct-sidecar test added today),
-replace the lease auto-approve stub with a real GUI consent prompt, and address issue #51 (Windows
-owner-PID check on the loopback Ollama port). Then: wire voice (part-08) into `apps/desktop`.
+**In flight, interrupted by a WSL shutdown — resume this first:** a codex agent ("lease-wiring")
+was dispatched on issue #52 (wire apps/desktop to part-10 scope leases for real) in worktree
+`~/projects/code/A-Eye-worktrees/desktop-lease-wiring`, branch `agents/desktop-lease-wiring`. It
+was killed mid-exploration with **no commits yet** (git status was clean in that worktree at
+shutdown), so nothing is lost — but it had found a useful second finding worth feeding back in on
+resume: part-09's overlay result now returns `maximum_duration_secs`, while apps/desktop's host.rs
+still parses the old field name `expires_in_secs` — a second contract mismatch alongside the
+lease_id gap, worth fixing in the same PR. On resume: re-run `herdr agent start lease-wiring
+--kind codex --pane <pane in that worktree>` (recreate the worktree with `herdr worktree create`
+if it was cleaned up) and re-send the same brief (see chat history around 2026-10-19 for the exact
+prompt), adding a line about the `maximum_duration_secs` rename.
+
+See `docs/planning/ROADMAP.md`'s "Current status" section for the full ranked list beyond that.
+Short version: wire apps/desktop to part-10 scope leases for real (issue #52), replace the lease
+auto-approve stub with a real GUI consent prompt, and address issue #51 (Windows owner-PID check
+on the loopback Ollama port). Then: wire voice (part-08) into `apps/desktop`.
 
 ## Standing operating rules (from the user, this session)
 
