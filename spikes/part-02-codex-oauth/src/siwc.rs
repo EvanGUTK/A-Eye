@@ -19,6 +19,7 @@ use rand::Rng;
 
 use crate::callback::{CallbackError, CallbackServer};
 use crate::pkce;
+use crate::persistence::{Registration, Session, SessionError, SessionStore};
 use crate::token::{self, ExchangeRequest, TokenError, TokenSet};
 
 pub const ISSUER: &str = "https://auth.openai.com";
@@ -72,6 +73,8 @@ pub enum PlanUsageError {
     /// The callback carried no usable issued client_id: registration is incomplete.
     RegistrationIncomplete(String),
     Config(String),
+    Session(SessionError),
+    IdToken(IdTokenError),
 }
 
 impl std::fmt::Display for PlanUsageError {
@@ -81,6 +84,8 @@ impl std::fmt::Display for PlanUsageError {
             PlanUsageError::Token(e) => write!(f, "{e}"),
             PlanUsageError::RegistrationIncomplete(m) => write!(f, "registration incomplete: {m}"),
             PlanUsageError::Config(m) => write!(f, "configuration error: {m}"),
+            PlanUsageError::Session(e) => write!(f, "{e}"),
+            PlanUsageError::IdToken(e) => write!(f, "{e}"),
         }
     }
 }
@@ -95,7 +100,7 @@ pub struct IdTokenInfo {
     pub expires_at_unix: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdTokenError {
     Missing,
     Malformed(&'static str),
@@ -125,6 +130,25 @@ pub struct PlanUsageOutcome {
     /// Whether the token response's granted scopes include [`PLAN_USAGE_SCOPE`].
     pub plan_usage_granted: bool,
     pub id_token: Result<IdTokenInfo, IdTokenError>,
+}
+
+/// Persist the issued client id and every token field only after the existing
+/// claim checks pass. Signature verification remains unimplemented in this spike.
+pub fn run_and_store(
+    cfg: &PlanUsageConfig,
+    store: &SessionStore<'_>,
+    present: impl FnOnce(&url::Url),
+) -> Result<PlanUsageOutcome, PlanUsageError> {
+    let out = run(cfg, present)?;
+    if let Err(e) = &out.id_token {
+        return Err(PlanUsageError::IdToken(e.clone()));
+    }
+    let session = Session::new(Registration {
+        token_url: cfg.token_url.clone(), client_id: out.issued_client_id.clone(),
+        resource: Some(RESOURCE.into()), encoding: token::RefreshEncoding::Form,
+    }, out.tokens.clone());
+    store.save(&session).map_err(PlanUsageError::Session)?;
+    Ok(out)
 }
 
 /// Authorize URL for a first registration. Every value is percent-encoded by `url`.
@@ -199,6 +223,10 @@ pub fn run(cfg: &PlanUsageConfig, present: impl FnOnce(&url::Url)) -> Result<Pla
         None => Err(IdTokenError::Missing),
     };
     Ok(PlanUsageOutcome { tokens, issued_client_id, redirect_uri, plan_usage_granted, id_token })
+}
+
+pub fn has_plan_usage_scope(tokens: &TokenSet) -> bool {
+    scope_contains(tokens.scope.as_deref(), PLAN_USAGE_SCOPE)
 }
 
 fn scope_contains(scope: Option<&str>, wanted: &str) -> bool {

@@ -22,6 +22,15 @@ cargo run --manifest-path spikes/part-02-codex-oauth/Cargo.toml -- --live-plan-u
 First build takes about 1.5 minutes (use `CARGO_BUILD_JOBS=1` if other agents are building; a
 parallel build was OOM-killed once on this machine).
 
+Persistence update (2026-10-19, issue #10): the live modes now use part 01 Secret
+Service storage. A cached token is reused or refreshed before a callback port is
+opened. New sign-ins are saved and read back; tokens survive process exit. The
+default account alias is `plan-usage` (`default` for legacy `--live`), selectable via
+`A_EYE_OAUTH_ACCOUNT_ID`. A missing/unusable keyring is an error, with no plaintext
+fallback. See [part 02](../../spikes/part-02-codex-oauth/README.md) for restart,
+refresh, recovery and verification limits. The startup paths below describe a
+**missing** credential entry.
+
 What happens:
 
 1. The binary creates `~/.config/a-eye/host-id` (an opaque `urn:uuid:` value, mode 0600, not a
@@ -44,15 +53,15 @@ A pass looks like this (no row contains a token value):
   UNVERIFIED  id_token.signature             not checked: needs the provider JWKS (...)
 ```
 
-Send back only that table and the exit code. Tokens are discarded on exit and never written to
-disk or printed.
+Send back only that table and the exit code. Token values are never printed; the full token set
+and issued client ID are retained through part 01 in Secret Service after successful claim checks.
 
 ### Know before you click
 
 - **Server-side effect.** Approving registers an A-Eye client on OpenAI's side, bound to your
   account and the workspace you pick. The pages read do not say how to remove it. The host-id file
-  is reused on later runs; a second run still performs a fresh first registration, and what the
-  server does with a repeated registration for the same host id is unknown.
+  is reused on later runs. A second run uses the saved session/issued client ID and refreshes
+  when needed; it does not register another client automatically after a refresh failure.
 - **Eligibility is unconfirmed.** OpenAI describes this route as available to open-source apps and
   points to a preview-limitations page. The server may refuse the request or the consent. If it
   does, record the exact error page text (not any URL parameters) and stop.

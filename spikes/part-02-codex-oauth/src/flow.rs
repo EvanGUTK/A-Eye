@@ -1,10 +1,11 @@
 //! Orchestration: PKCE -> loopback callback server -> authorize URL -> (browser)
-//! -> callback -> token exchange. Storage is a separate step (see `store`).
+//! -> callback -> token exchange -> part-01 credential store (`run_persisted`).
 
 use std::time::Duration;
 
 use crate::callback::{CallbackError, CallbackServer};
 use crate::pkce;
+use crate::persistence::{Registration, Session, SessionError, SessionStore};
 use crate::token::{self, ExchangeRequest, TokenError, TokenSet};
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,7 @@ pub enum FlowError {
     Config(String),
     Callback(CallbackError),
     Token(TokenError),
+    Session(SessionError),
 }
 
 impl std::fmt::Display for FlowError {
@@ -32,6 +34,7 @@ impl std::fmt::Display for FlowError {
             FlowError::Config(m) => write!(f, "configuration error: {m}"),
             FlowError::Callback(e) => write!(f, "{e}"),
             FlowError::Token(e) => write!(f, "{e}"),
+            FlowError::Session(e) => write!(f, "{e}"),
         }
     }
 }
@@ -42,6 +45,27 @@ pub struct FlowOutcome {
     pub tokens: TokenSet,
     pub redirect_uri: String,
     pub callback_port: u16,
+}
+
+/// Resume before binding a callback port or presenting a browser URL. The caller
+/// holds the process lock until storage readback completes.
+pub fn run_persisted(
+    cfg: &FlowConfig,
+    store: &SessionStore<'_>,
+    present: impl FnOnce(&url::Url),
+) -> Result<Session, FlowError> {
+    let encoding = token::RefreshEncoding::Json;
+    if let Some(session) = store.resume(&cfg.token_url, Some(&cfg.client_id), None,
+        encoding, std::time::SystemTime::now()).map_err(FlowError::Session)?
+    {
+        return Ok(session);
+    }
+    let out = run(cfg, present)?;
+    let session = Session::new(Registration {
+        token_url: cfg.token_url.clone(), client_id: cfg.client_id.clone(), resource: None, encoding,
+    }, out.tokens);
+    store.save(&session).map_err(FlowError::Session)?;
+    Ok(session)
 }
 
 /// Endpoint URLs for `--live` must be `https`, or `http` only for a loopback
