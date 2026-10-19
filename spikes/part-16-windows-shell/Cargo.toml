@@ -1,0 +1,22 @@
+[package]
+name = "spike-16-windows-shell"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A-Eye spike 16: minimal Tauri 2 shell packaged as a native Windows executable"
+
+# Standalone spike: not part of any workspace.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.4", features = [] }
+
+[profile.release]
+# Smaller binary; irrelevant to correctness, recorded so the size evidence is reproducible.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

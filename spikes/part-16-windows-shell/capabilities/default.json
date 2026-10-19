@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Spike 16 grants no plugin or command permissions: the shell only shows a static page.",
+  "windows": ["main"],
+  "permissions": []
+}
